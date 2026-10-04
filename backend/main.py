@@ -2,7 +2,1086 @@ import os
 import shutil
 import uuid
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFimport os
+import io
+import sqlite3
+import uuid
+from datetime import datetime
+
+from fastapi import (
+    FastAPI,
+    UploadFile,
+    File,
+    HTTPException
+)
+
+from fastapi.middleware.cors import CORSMiddleware
+
+from pydantic import BaseModel
+
+from pypdf import PdfReader
+
+from dotenv import load_dotenv
+
+from groq import Groq
+
+from rag import (
+    create_vector_index,
+    search_document
+)
+
+
+# ==================================================
+# ENV
+# ==================================================
+
+load_dotenv()
+
+
+# ==================================================
+# APP
+# ==================================================
+
+app = FastAPI(
+    title="AI Study Assistant API"
+)
+
+
+# ==================================================
+# CORS
+# ==================================================
+
+app.add_middleware(
+    CORSMiddleware,
+
+    allow_origins=[
+        "*"
+    ],
+
+    allow_credentials=False,
+
+    allow_methods=[
+        "*"
+    ],
+
+    allow_headers=[
+        "*"
+    ]
+)
+
+
+# ==================================================
+# PATHS
+# ==================================================
+
+BASE_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
+
+DB_PATH = os.path.join(
+    BASE_DIR,
+    "study_assistant.db"
+)
+
+UPLOAD_DIR = os.path.join(
+    BASE_DIR,
+    "uploads"
+)
+
+os.makedirs(
+    UPLOAD_DIR,
+    exist_ok=True
+)
+
+
+# ==================================================
+# GROQ
+# ==================================================
+
+GROQ_API_KEY = os.getenv(
+    "GROQ_API_KEY"
+)
+
+GROQ_MODEL = os.getenv(
+    "GROQ_MODEL",
+    "llama-3.3-70b-versatile"
+)
+
+groq_client = None
+
+if GROQ_API_KEY:
+
+    groq_client = Groq(
+        api_key=GROQ_API_KEY
+    )
+
+else:
+
+    print(
+        "WARNING: GROQ_API_KEY not found."
+    )
+
+
+# ==================================================
+# DATABASE
+# ==================================================
+
+def get_db():
+
+    connection = sqlite3.connect(
+        DB_PATH
+    )
+
+    connection.row_factory = (
+        sqlite3.Row
+    )
+
+    return connection
+
+
+def init_db():
+
+    connection = get_db()
+
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT DEFAULT 'New Chat',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+
+            FOREIGN KEY(chat_id)
+            REFERENCES chats(id)
+            ON DELETE CASCADE
+        )
+    """)
+
+    connection.commit()
+
+    connection.close()
+
+
+init_db()
+
+
+# ==================================================
+# SCHEMAS
+# ==================================================
+
+class ChatRequest(BaseModel):
+
+    chat_id: int
+
+    message: str
+
+    document_id: str | None = None
+
+
+# ==================================================
+# HEALTH
+# ==================================================
+
+@app.get("/")
+def root():
+
+    return {
+        "success": True,
+        "message": "AI Study Assistant API is running"
+    }
+
+
+@app.get("/health")
+def health():
+
+    return {
+        "success": True,
+        "groq_configured": bool(
+            GROQ_API_KEY
+        )
+    }
+
+
+# ==================================================
+# CREATE CHAT
+# ==================================================
+
+@app.post("/chats")
+def create_chat():
+
+    now = datetime.utcnow().isoformat()
+
+    connection = get_db()
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO chats (
+            title,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?)
+        """,
+        (
+            "New Chat",
+            now,
+            now
+        )
+    )
+
+    chat_id = cursor.lastrowid
+
+    connection.commit()
+
+    connection.close()
+
+    return {
+        "success": True,
+        "chat_id": chat_id
+    }
+
+
+# ==================================================
+# GET ALL CHATS
+# ==================================================
+
+@app.get("/chats")
+def get_chats():
+
+    connection = get_db()
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT
+            id,
+            title,
+            created_at,
+            updated_at
+        FROM chats
+        ORDER BY updated_at DESC
+        """
+    )
+
+    chats = [
+        dict(row)
+        for row in cursor.fetchall()
+    ]
+
+    connection.close()
+
+    return chats
+
+
+# ==================================================
+# GET CHAT MESSAGES
+# ==================================================
+
+@app.get("/chats/{chat_id}")
+def get_chat(
+    chat_id: int
+):
+
+    connection = get_db()
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT
+            id,
+            role,
+            content,
+            created_at
+        FROM messages
+        WHERE chat_id = ?
+        ORDER BY id ASC
+        """,
+        (chat_id,)
+    )
+
+    messages = [
+        dict(row)
+        for row in cursor.fetchall()
+    ]
+
+    connection.close()
+
+    return messages
+
+
+# ==================================================
+# DELETE CHAT
+# ==================================================
+
+@app.delete("/chats/{chat_id}")
+def delete_chat(
+    chat_id: int
+):
+
+    connection = get_db()
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        DELETE FROM messages
+        WHERE chat_id = ?
+        """,
+        (chat_id,)
+    )
+
+    cursor.execute(
+        """
+        DELETE FROM chats
+        WHERE id = ?
+        """,
+        (chat_id,)
+    )
+
+    deleted = cursor.rowcount
+
+    connection.commit()
+
+    connection.close()
+
+    if deleted == 0:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Chat not found"
+        )
+
+    return {
+        "success": True,
+        "message": "Chat deleted"
+    }
+
+
+# ==================================================
+# PDF TEXT EXTRACTION
+# ==================================================
+
+def extract_pdf_text(
+    file_bytes: bytes
+):
+
+    try:
+
+        reader = PdfReader(
+            io.BytesIO(file_bytes)
+        )
+
+    except Exception as error:
+
+        raise ValueError(
+            f"Invalid PDF file: {error}"
+        )
+
+    pages_text = []
+
+    for page_number, page in enumerate(
+        reader.pages,
+        start=1
+    ):
+
+        try:
+
+            text = page.extract_text()
+
+        except Exception as error:
+
+            print(
+                f"Page {page_number} extraction error:",
+                error
+            )
+
+            text = ""
+
+        if text:
+
+            pages_text.append(
+                text.strip()
+            )
+
+    full_text = "\n\n".join(
+        pages_text
+    ).strip()
+
+    return (
+        full_text,
+        len(reader.pages)
+    )
+
+
+# ==================================================
+# PDF UPLOAD
+# ==================================================
+
+@app.post("/upload")
+async def upload_pdf(
+    file: UploadFile = File(...)
+):
+
+    # ==================================================
+    # CHECK FILE NAME
+    # ==================================================
+
+    if not file.filename:
+
+        raise HTTPException(
+            status_code=400,
+            detail="No file selected."
+        )
+
+
+    # ==================================================
+    # CHECK PDF
+    # ==================================================
+
+    filename_lower = (
+        file.filename
+        .lower()
+    )
+
+    if not filename_lower.endswith(
+        ".pdf"
+    ):
+
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF files are allowed."
+        )
+
+
+    # ==================================================
+    # READ FILE
+    # ==================================================
+
+    try:
+
+        file_bytes = await file.read()
+
+    except Exception as error:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unable to read uploaded file: {error}"
+        )
+
+
+    if not file_bytes:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded PDF is empty."
+        )
+
+
+    # ==================================================
+    # SIZE CHECK
+    # ==================================================
+
+    max_size = 20 * 1024 * 1024
+
+    if len(file_bytes) > max_size:
+
+        raise HTTPException(
+            status_code=413,
+            detail="PDF size must be less than 20 MB."
+        )
+
+
+    # ==================================================
+    # EXTRACT TEXT
+    # ==================================================
+
+    try:
+
+        text, pages = extract_pdf_text(
+            file_bytes
+        )
+
+    except ValueError as error:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        )
+
+
+    if not text:
+
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "No readable text found in this PDF. "
+                "If it is a scanned PDF, OCR is required."
+            )
+        )
+
+
+    # ==================================================
+    # DOCUMENT ID
+    # ==================================================
+
+    document_id = str(
+        uuid.uuid4()
+    )
+
+
+    # ==================================================
+    # SAVE ORIGINAL PDF
+    # ==================================================
+
+    safe_filename = (
+        os.path.basename(
+            file.filename
+        )
+    )
+
+    pdf_path = os.path.join(
+        UPLOAD_DIR,
+        f"{document_id}_{safe_filename}"
+    )
+
+    try:
+
+        with open(
+            pdf_path,
+            "wb"
+        ) as pdf_file:
+
+            pdf_file.write(
+                file_bytes
+            )
+
+    except Exception as error:
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to save PDF: {error}"
+        )
+
+
+    # ==================================================
+    # CREATE RAG INDEX
+    # ==================================================
+
+    try:
+
+        rag_result = create_vector_index(
+            document_id,
+            text
+        )
+
+    except Exception as error:
+
+        # Remove uploaded PDF if indexing fails
+        try:
+
+            if os.path.exists(
+                pdf_path
+            ):
+                os.remove(
+                    pdf_path
+                )
+
+        except Exception:
+            pass
+
+        print(
+            "RAG creation error:",
+            error
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"RAG processing failed: {error}"
+        )
+
+
+    # ==================================================
+    # SUCCESS
+    # ==================================================
+
+    return {
+        "success": True,
+        "document_id": str(document_id),
+        "filename": safe_filename,
+        "pages": pages,
+        "chunks": rag_result["chunks"],
+        "message": "PDF uploaded and processed successfully."
+    }
+
+
+# ==================================================
+# BUILD CHAT HISTORY
+# ==================================================
+
+def get_chat_history(
+    chat_id: int,
+    limit=12
+):
+
+    connection = get_db()
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT role, content
+        FROM messages
+        WHERE chat_id = ?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (
+            chat_id,
+            limit
+        )
+    )
+
+    rows = cursor.fetchall()
+
+    connection.close()
+
+    rows.reverse()
+
+    return [
+        {
+            "role": row["role"],
+            "content": row["content"]
+        }
+        for row in rows
+    ]
+
+
+# ==================================================
+# GENERATE AI RESPONSE
+# ==================================================
+
+def generate_ai_response(
+    message,
+    history,
+    context=""
+):
+
+    if not groq_client:
+
+        return (
+            "Groq API key is not configured. "
+            "Please add GROQ_API_KEY to your .env file."
+        )
+
+
+    system_prompt = """
+You are an AI Study Assistant.
+
+Your job is to help the user understand
+study material clearly.
+
+Rules:
+
+1. If document context is provided, answer
+   primarily from that context.
+
+2. Do not invent facts that are not supported
+   by the document.
+
+3. If the answer is not available in the
+   document, clearly say that it is not
+   available in the uploaded document.
+
+4. For general questions without document
+   context, answer normally.
+
+5. Explain technical topics simply.
+
+6. You can answer in English, Hindi, or
+   Hinglish according to the user's language.
+
+7. Use clean formatting with headings and
+   bullet points when useful.
+"""
+
+
+    if context:
+
+        system_prompt += f"""
+
+DOCUMENT CONTEXT:
+
+{context}
+
+END DOCUMENT CONTEXT.
+"""
+
+
+    messages = [
+        {
+            "role": "system",
+            "content": system_prompt
+        }
+    ]
+
+
+    messages.extend(
+        history
+    )
+
+
+    messages.append(
+        {
+            "role": "user",
+            "content": message
+        }
+    )
+
+
+    try:
+
+        completion = (
+            groq_client
+            .chat
+            .completions
+            .create(
+                model=GROQ_MODEL,
+                messages=messages,
+                temperature=0.2,
+                max_tokens=2048
+            )
+        )
+
+        return (
+            completion
+            .choices[0]
+            .message
+            .content
+        )
+
+    except Exception as error:
+
+        print(
+            "Groq error:",
+            error
+        )
+
+        raise RuntimeError(
+            f"AI response failed: {error}"
+        )
+
+
+# ==================================================
+# CHAT
+# ==================================================
+
+@app.post("/chat")
+def chat(
+    request: ChatRequest
+):
+
+    message = (
+        request.message
+        .strip()
+    )
+
+
+    if not message:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Message cannot be empty."
+        )
+
+
+    # ==================================================
+    # CHECK CHAT
+    # ==================================================
+
+    connection = get_db()
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT id
+        FROM chats
+        WHERE id = ?
+        """,
+        (request.chat_id,)
+    )
+
+    chat_exists = cursor.fetchone()
+
+    connection.close()
+
+
+    if not chat_exists:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Chat not found."
+        )
+
+
+    # ==================================================
+    # SAVE USER MESSAGE
+    # ==================================================
+
+    now = datetime.utcnow().isoformat()
+
+    connection = get_db()
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO messages (
+            chat_id,
+            role,
+            content,
+            created_at
+        )
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            request.chat_id,
+            "user",
+            message,
+            now
+        )
+    )
+
+    connection.commit()
+
+    connection.close()
+
+
+    # ==================================================
+    # RAG SEARCH
+    # ==================================================
+
+    context = ""
+
+    used_rag = False
+
+    rag_results = []
+
+
+    if request.document_id:
+
+        rag_results = search_document(
+            request.document_id,
+            message,
+            top_k=8
+        )
+
+
+        if rag_results:
+
+            used_rag = True
+
+            context_parts = []
+
+            for result in rag_results:
+
+                context_parts.append(
+                    result["text"]
+                )
+
+            context = "\n\n---\n\n".join(
+                context_parts
+            )
+
+
+    # ==================================================
+    # CHAT HISTORY
+    # ==================================================
+
+    history = get_chat_history(
+        request.chat_id,
+        limit=12
+    )
+
+
+    # Remove latest user message because
+    # it will be sent separately.
+    if history:
+
+        last = history[-1]
+
+        if (
+            last["role"] == "user"
+            and last["content"] == message
+        ):
+
+            history = history[:-1]
+
+
+    # ==================================================
+    # AI RESPONSE
+    # ==================================================
+
+    try:
+
+        response_text = generate_ai_response(
+            message,
+            history,
+            context
+        )
+
+    except Exception as error:
+
+        # Remove user message if AI fails
+        connection = get_db()
+
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            DELETE FROM messages
+            WHERE id = (
+                SELECT MAX(id)
+                FROM messages
+                WHERE chat_id = ?
+            )
+            """,
+            (request.chat_id,)
+        )
+
+        connection.commit()
+
+        connection.close()
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(error)
+        )
+
+
+    # ==================================================
+    # SAVE AI RESPONSE
+    # ==================================================
+
+    now = datetime.utcnow().isoformat()
+
+    connection = get_db()
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO messages (
+            chat_id,
+            role,
+            content,
+            created_at
+        )
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            request.chat_id,
+            "assistant",
+            response_text,
+            now
+        )
+    )
+
+
+    # ==================================================
+    # UPDATE CHAT TITLE
+    # ==================================================
+
+    cursor.execute(
+        """
+        SELECT COUNT(*)
+        FROM messages
+        WHERE chat_id = ?
+        """,
+        (request.chat_id,)
+    )
+
+    message_count = cursor.fetchone()[0]
+
+
+    if message_count <= 2:
+
+        title = message[:50]
+
+        cursor.execute(
+            """
+            UPDATE chats
+            SET
+                title = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                title,
+                now,
+                request.chat_id
+            )
+        )
+
+    else:
+
+        cursor.execute(
+            """
+            UPDATE chats
+            SET updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                now,
+                request.chat_id
+            )
+        )
+
+
+    connection.commit()
+
+    connection.close()
+
+
+    return {
+        "success": True,
+        "chat_id": request.chat_id,
+        "response": response_text,
+        "used_rag": used_rag,
+        "document_id": request.document_id,
+        "sources": len(rag_results)
+    }
+
+
+# ==================================================
+# RUN
+# ==================================================
+
+if __name__ == "__main__":
+
+    import uvicorn
+
+    uvicorn.run(
+        "main:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True
+    )ile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
