@@ -11,12 +11,7 @@ from sentence_transformers import SentenceTransformer
 # RAG DATA DIRECTORY
 # ==================================================
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-RAG_DIR = os.path.join(
-    BASE_DIR,
-    "rag_data"
-)
+RAG_DIR = "rag_data"
 
 os.makedirs(
     RAG_DIR,
@@ -28,13 +23,9 @@ os.makedirs(
 # EMBEDDING MODEL
 # ==================================================
 
-print("Loading embedding model...")
-
 embedding_model = SentenceTransformer(
     "all-MiniLM-L6-v2"
 )
-
-print("Embedding model loaded.")
 
 
 # ==================================================
@@ -46,49 +37,30 @@ def create_chunks(
     chunk_size=300,
     overlap=50
 ):
-
     if not text or not text.strip():
         return []
 
-    if chunk_size <= 0:
-        raise ValueError(
-            "chunk_size must be greater than 0."
-        )
-
-    if overlap < 0 or overlap >= chunk_size:
-        raise ValueError(
-            "overlap must be >= 0 and smaller than chunk_size."
-        )
-
     words = text.split()
-
-    if not words:
-        return []
-
     chunks = []
-
-    step = chunk_size - overlap
 
     start = 0
 
     while start < len(words):
 
-        end = min(
-            start + chunk_size,
-            len(words)
-        )
+        end = start + chunk_size
 
         chunk = " ".join(
             words[start:end]
-        ).strip()
+        )
 
-        if chunk:
-            chunks.append(chunk)
+        if chunk.strip():
+            chunks.append(
+                chunk.strip()
+            )
 
-        if end >= len(words):
-            break
-
-        start += step
+        start += (
+            chunk_size - overlap
+        )
 
     return chunks
 
@@ -100,31 +72,20 @@ def create_chunks(
 def create_embeddings(chunks):
 
     if not chunks:
-        return np.empty(
-            (0, 0),
+        return np.array(
+            [],
             dtype="float32"
         )
 
     embeddings = embedding_model.encode(
         chunks,
         convert_to_numpy=True,
-        normalize_embeddings=True,
-        show_progress_bar=False
+        normalize_embeddings=True
     )
 
-    embeddings = np.asarray(
-        embeddings,
-        dtype="float32"
+    return embeddings.astype(
+        "float32"
     )
-
-    if embeddings.ndim == 1:
-
-        embeddings = embeddings.reshape(
-            1,
-            -1
-        )
-
-    return embeddings
 
 
 # ==================================================
@@ -135,11 +96,6 @@ def create_vector_index(
     document_id,
     text
 ):
-
-    if not document_id:
-        raise ValueError(
-            "document_id is required."
-        )
 
     chunks = create_chunks(
         text
@@ -153,11 +109,6 @@ def create_vector_index(
     embeddings = create_embeddings(
         chunks
     )
-
-    if embeddings.size == 0:
-        raise ValueError(
-            "Failed to create embeddings."
-        )
 
     dimension = embeddings.shape[1]
 
@@ -198,7 +149,7 @@ def create_vector_index(
         )
 
     return {
-        "document_id": str(document_id),
+        "document_id": document_id,
         "chunks": len(chunks)
     }
 
@@ -209,11 +160,13 @@ def create_vector_index(
 
 def clean_query(query):
 
-    if not query or not query.strip():
+    if not query:
         return []
 
     query = query.lower()
 
+    # Keep Unicode letters/numbers so Hindi queries
+    # are not removed.
     query = re.sub(
         r"[^\w\s]",
         " ",
@@ -262,27 +215,28 @@ def clean_query(query):
 
     words = query.split()
 
-    return [
+    useful_words = [
         word
         for word in words
         if word not in stop_words
     ]
 
+    return useful_words
+
 
 # ==================================================
-# DOCUMENT-WIDE QUERY
+# DOCUMENT-WIDE QUERY DETECTION
 # ==================================================
 
 def is_document_wide_query(query):
 
-    if not query or not query.strip():
+    if not query:
         return False
 
     query_lower = query.lower().strip()
 
     patterns = [
         "summarize",
-        "summarise",
         "summary",
         "main topics",
         "key points",
@@ -290,27 +244,17 @@ def is_document_wide_query(query):
         "important concepts",
         "main points",
         "overview",
+        "give me an overview",
         "explain this pdf",
         "explain the pdf",
-        "explain this document",
-        "explain the document",
         "what is this pdf about",
         "what is this document about",
         "tell me about this pdf",
         "tell me about this document",
-        "summarize this",
-        "summarise this",
-
-        # Hindi
         "सारांश",
-        "सारांश बताओ",
         "मुख्य विषय",
         "मुख्य बिंदु",
-        "जरूरी बिंदु",
-        "महत्वपूर्ण बिंदु",
-        "इसका सारांश",
-        "इस pdf का सारांश",
-        "इस डॉक्यूमेंट का सारांश"
+        "जरूरी बिंदु"
     ]
 
     return any(
@@ -328,9 +272,6 @@ def keyword_score(
     text
 ):
 
-    if not query or not text:
-        return 0.0
-
     query_words = clean_query(
         query
     )
@@ -344,33 +285,19 @@ def keyword_score(
 
     for word in query_words:
 
-        if re.match(
-            r"^[A-Za-z0-9_]+$",
-            word
-        ):
+        pattern = (
+            r"\b"
+            + re.escape(word)
+            + r"\b"
+        )
 
-            pattern = (
-                r"\b"
-                + re.escape(word)
-                + r"\b"
-            )
-
-            matches = re.findall(
-                pattern,
-                text_lower,
-                flags=re.UNICODE
-            )
-
-        else:
-
-            matches = re.findall(
-                re.escape(word),
-                text_lower,
-                flags=re.UNICODE
-            )
+        matches = re.findall(
+            pattern,
+            text_lower,
+            flags=re.UNICODE
+        )
 
         if matches:
-
             score += min(
                 len(matches) * 0.20,
                 0.60
@@ -386,7 +313,6 @@ def keyword_score(
         original_query
         and original_query in text_lower
     ):
-
         score += 0.50
 
     return min(
@@ -405,22 +331,7 @@ def search_document(
     top_k=5
 ):
 
-    if not document_id:
-        return []
-
     if not query or not query.strip():
-        return []
-
-    try:
-        top_k = int(top_k)
-
-    except (
-        TypeError,
-        ValueError
-    ):
-        top_k = 5
-
-    if top_k <= 0:
         return []
 
     index_path = os.path.join(
@@ -433,25 +344,15 @@ def search_document(
         f"{document_id}.json"
     )
 
-    if not os.path.exists(index_path):
-
-        print(
-            f"RAG index not found: {index_path}"
-        )
-
+    if not os.path.exists(
+        index_path
+    ):
         return []
 
-    if not os.path.exists(chunks_path):
-
-        print(
-            f"RAG chunks not found: {chunks_path}"
-        )
-
+    if not os.path.exists(
+        chunks_path
+    ):
         return []
-
-    # ==================================================
-    # LOAD INDEX
-    # ==================================================
 
     try:
 
@@ -465,7 +366,9 @@ def search_document(
             encoding="utf-8"
         ) as file:
 
-            chunks = json.load(file)
+            chunks = json.load(
+                file
+            )
 
     except Exception as error:
 
@@ -479,19 +382,8 @@ def search_document(
     if not chunks:
         return []
 
-    if index.ntotal == 0:
-        return []
-
-    total_vectors = min(
-        index.ntotal,
-        len(chunks)
-    )
-
-    if total_vectors == 0:
-        return []
-
     # ==================================================
-    # QUERY EMBEDDING
+    # VECTOR SEARCH
     # ==================================================
 
     try:
@@ -499,38 +391,17 @@ def search_document(
         query_embedding = embedding_model.encode(
             [query],
             convert_to_numpy=True,
-            normalize_embeddings=True,
-            show_progress_bar=False
+            normalize_embeddings=True
         )
 
-        query_embedding = np.asarray(
-            query_embedding,
-            dtype="float32"
+        query_embedding = (
+            query_embedding
+            .astype("float32")
         )
-
-        if query_embedding.ndim == 1:
-
-            query_embedding = (
-                query_embedding.reshape(
-                    1,
-                    -1
-                )
-            )
-
-        if query_embedding.shape[1] != index.d:
-
-            print(
-                "Embedding dimension mismatch:",
-                query_embedding.shape[1],
-                "!=",
-                index.d
-            )
-
-            return []
 
         search_count = min(
             max(top_k * 3, 10),
-            total_vectors
+            len(chunks)
         )
 
         vector_scores, indices = index.search(
@@ -552,7 +423,6 @@ def search_document(
     # ==================================================
 
     results = []
-
     seen = set()
 
     document_wide = is_document_wide_query(
@@ -564,12 +434,10 @@ def search_document(
         indices[0]
     ):
 
-        index_id = int(index_id)
-
         if index_id < 0:
             continue
 
-        if index_id >= total_vectors:
+        if index_id >= len(chunks):
             continue
 
         if index_id in seen:
@@ -579,28 +447,23 @@ def search_document(
 
         text = chunks[index_id]
 
-        if not text or not str(text).strip():
-            continue
-
-        text = str(text).strip()
-
         k_score = keyword_score(
             query,
             text
         )
 
-        vector_score = float(
-            vector_score
-        )
-
         final_score = (
-            vector_score * 0.70
+            float(vector_score) * 0.70
             +
             k_score * 0.30
         )
 
+        # A summary/overview query refers to the
+        # document as a whole. Therefore the retrieved
+        # chunks are considered relevant even when the
+        # words "summarize" or "overview" do not appear
+        # inside the PDF.
         if document_wide:
-
             final_score = max(
                 final_score,
                 0.50
@@ -609,13 +472,23 @@ def search_document(
         results.append({
             "text": text,
             "score": float(final_score),
-            "vector_score": vector_score,
+            "vector_score": float(vector_score),
             "keyword_score": float(k_score)
         })
+
+    # ==================================================
+    # SORT
+    # ==================================================
 
     results.sort(
         key=lambda x: x["score"],
         reverse=True
     )
 
-    return results[:top_k]
+    # ==================================================
+    # RETURN TOP RESULTS
+    # ==================================================
+
+    return results[
+        :top_k
+    ]
