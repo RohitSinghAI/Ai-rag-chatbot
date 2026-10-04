@@ -2,7 +2,7 @@ import os
 import shutil
 import uuid
 
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -13,7 +13,7 @@ from database import get_connection, create_tables
 
 from rag import (
     create_vector_index,
-    search_document
+    search_document,
 )
 
 
@@ -30,7 +30,7 @@ load_dotenv()
 
 app = FastAPI(
     title="AI Chatbot API",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 
@@ -40,14 +40,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-
     allow_origins=["*"],
-
     allow_credentials=True,
-
     allow_methods=["*"],
-
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
 
@@ -55,9 +51,12 @@ app.add_middleware(
 # Groq Client
 # ==================================================
 
-client = Groq(
-    api_key=os.getenv("GROQ_API_KEY")
-)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+if not GROQ_API_KEY:
+    print("WARNING: GROQ_API_KEY is not set.")
+
+client = Groq(api_key=GROQ_API_KEY)
 
 
 # ==================================================
@@ -75,7 +74,7 @@ UPLOAD_DIR = "uploads"
 
 os.makedirs(
     UPLOAD_DIR,
-    exist_ok=True
+    exist_ok=True,
 )
 
 
@@ -84,12 +83,8 @@ os.makedirs(
 # ==================================================
 
 class ChatRequest(BaseModel):
-
     chat_id: int | None = None
-
     message: str
-
-    # PDF / RAG document ID
     document_id: str | None = None
 
 
@@ -99,7 +94,6 @@ class ChatRequest(BaseModel):
 
 @app.get("/")
 def home():
-
     return {
         "message": "AI Chatbot Backend is running!"
     }
@@ -116,33 +110,39 @@ def home():
 
 @app.post("/chats")
 def create_chat():
-
     connection = get_connection()
 
-    cursor = connection.cursor()
+    try:
+        cursor = connection.cursor()
 
+        cursor.execute(
+            """
+            INSERT INTO chats (title)
+            VALUES (?)
+            """,
+            ("New Chat",),
+        )
 
-    cursor.execute(
-        """
-        INSERT INTO chats (title)
-        VALUES (?)
-        """,
-        ("New Chat",)
-    )
+        chat_id = cursor.lastrowid
 
+        connection.commit()
 
-    chat_id = cursor.lastrowid
+        return {
+            "chat_id": chat_id,
+            "title": "New Chat",
+        }
 
+    except Exception as error:
+        connection.rollback()
+        print("Create Chat Error:", error)
 
-    connection.commit()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to create chat",
+        )
 
-    connection.close()
-
-
-    return {
-        "chat_id": chat_id,
-        "title": "New Chat"
-    }
+    finally:
+        connection.close()
 
 
 # --------------------------------------------------
@@ -151,31 +151,36 @@ def create_chat():
 
 @app.get("/chats")
 def get_chats():
-
     connection = get_connection()
 
-    cursor = connection.cursor()
+    try:
+        cursor = connection.cursor()
 
+        cursor.execute(
+            """
+            SELECT id, title, created_at
+            FROM chats
+            ORDER BY id DESC
+            """
+        )
 
-    cursor.execute(
-        """
-        SELECT id, title, created_at
-        FROM chats
-        ORDER BY id DESC
-        """
-    )
+        chats = [
+            dict(row)
+            for row in cursor.fetchall()
+        ]
 
+        return chats
 
-    chats = [
-        dict(row)
-        for row in cursor.fetchall()
-    ]
+    except Exception as error:
+        print("Get Chats Error:", error)
 
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to fetch chats",
+        )
 
-    connection.close()
-
-
-    return chats
+    finally:
+        connection.close()
 
 
 # --------------------------------------------------
@@ -184,33 +189,38 @@ def get_chats():
 
 @app.get("/chats/{chat_id}")
 def get_chat_messages(chat_id: int):
-
     connection = get_connection()
 
-    cursor = connection.cursor()
+    try:
+        cursor = connection.cursor()
 
+        cursor.execute(
+            """
+            SELECT role, content, created_at
+            FROM messages
+            WHERE chat_id = ?
+            ORDER BY id ASC
+            """,
+            (chat_id,),
+        )
 
-    cursor.execute(
-        """
-        SELECT role, content, created_at
-        FROM messages
-        WHERE chat_id = ?
-        ORDER BY id ASC
-        """,
-        (chat_id,)
-    )
+        messages = [
+            dict(row)
+            for row in cursor.fetchall()
+        ]
 
+        return messages
 
-    messages = [
-        dict(row)
-        for row in cursor.fetchall()
-    ]
+    except Exception as error:
+        print("Get Chat Messages Error:", error)
 
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to fetch chat messages",
+        )
 
-    connection.close()
-
-
-    return messages
+    finally:
+        connection.close()
 
 
 # --------------------------------------------------
@@ -219,18 +229,18 @@ def get_chat_messages(chat_id: int):
 
 @app.delete("/chats/{chat_id}")
 def delete_chat(chat_id: int):
-
     connection = get_connection()
-    cursor = connection.cursor()
 
     try:
-        # Delete messages of this chat
+        cursor = connection.cursor()
+
+        # Delete messages
         cursor.execute(
             """
             DELETE FROM messages
             WHERE chat_id = ?
             """,
-            (chat_id,)
+            (chat_id,),
         )
 
         # Delete chat
@@ -239,38 +249,38 @@ def delete_chat(chat_id: int):
             DELETE FROM chats
             WHERE id = ?
             """,
-            (chat_id,)
+            (chat_id,),
         )
 
         if cursor.rowcount == 0:
             connection.rollback()
-            connection.close()
 
             return {
                 "success": False,
-                "message": "Chat not found"
+                "message": "Chat not found",
             }
 
         connection.commit()
-        connection.close()
 
         return {
             "success": True,
             "message": "Chat deleted successfully",
-            "chat_id": chat_id
+            "chat_id": chat_id,
         }
 
     except Exception as error:
-
         connection.rollback()
-        connection.close()
 
         print("Delete Chat Error:", error)
 
         return {
             "success": False,
-            "message": "Failed to delete chat"
+            "message": "Failed to delete chat",
         }
+
+    finally:
+        connection.close()
+
 
 # ==================================================
 # CHAT WITH AI + RAG
@@ -279,65 +289,82 @@ def delete_chat(chat_id: int):
 @app.post("/chat")
 def chat(request: ChatRequest):
 
+    # Validate message
+    user_message = request.message.strip()
+
+    if not user_message:
+        raise HTTPException(
+            status_code=400,
+            detail="Message cannot be empty.",
+        )
+
     connection = get_connection()
-    cursor = connection.cursor()
 
-    # ==================================================
-    # CREATE CHAT
-    # ==================================================
+    try:
+        cursor = connection.cursor()
 
-    chat_id = request.chat_id
+        # ==================================================
+        # CREATE CHAT
+        # ==================================================
 
-    if chat_id is None:
+        chat_id = request.chat_id
+
+        if chat_id is None:
+
+            cursor.execute(
+                """
+                INSERT INTO chats (title)
+                VALUES (?)
+                """,
+                ("New Chat",),
+            )
+
+            chat_id = cursor.lastrowid
+
+        else:
+
+            # Check whether chat exists
+            cursor.execute(
+                """
+                SELECT id
+                FROM chats
+                WHERE id = ?
+                """,
+                (chat_id,),
+            )
+
+            chat_exists = cursor.fetchone()
+
+            if not chat_exists:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Chat not found.",
+                )
+
+        # ==================================================
+        # GET PREVIOUS CHAT HISTORY
+        # IMPORTANT:
+        # Fetch history BEFORE inserting current message.
+        # This prevents duplicate current user message.
+        # ==================================================
 
         cursor.execute(
             """
-            INSERT INTO chats (title)
-            VALUES (?)
+            SELECT role, content
+            FROM messages
+            WHERE chat_id = ?
+            ORDER BY id ASC
             """,
-            ("New Chat",)
+            (chat_id,),
         )
 
-        chat_id = cursor.lastrowid
+        previous_messages = cursor.fetchall()
 
-    # ==================================================
-    # SAVE USER MESSAGE
-    # ==================================================
+        # ==================================================
+        # SYSTEM PROMPT
+        # ==================================================
 
-    cursor.execute(
-        """
-        INSERT INTO messages
-        (chat_id, role, content)
-        VALUES (?, ?, ?)
-        """,
-        (
-            chat_id,
-            "user",
-            request.message
-        )
-    )
-
-    # ==================================================
-    # GET CHAT HISTORY
-    # ==================================================
-
-    cursor.execute(
-        """
-        SELECT role, content
-        FROM messages
-        WHERE chat_id = ?
-        ORDER BY id ASC
-        """,
-        (chat_id,)
-    )
-
-    previous_messages = cursor.fetchall()
-
-    # ==================================================
-    # SYSTEM PROMPT
-    # ==================================================
-
-    system_prompt = """
+        system_prompt = """
 You are a helpful AI assistant.
 
 Rules:
@@ -356,105 +383,131 @@ Rules:
     information is genuinely unavailable.
 """
 
-    messages = [
-        {
-            "role": "system",
-            "content": system_prompt
-        }
-    ]
+        messages = [
+            {
+                "role": "system",
+                "content": system_prompt,
+            }
+        ]
 
-    # ==================================================
-    # RAG SEARCH
-    # ==================================================
+        # ==================================================
+        # ADD CONVERSATION HISTORY
+        # ==================================================
 
-    document_context = ""
-    use_rag = False
+        for previous_message in previous_messages:
 
-    if request.document_id:
+            role = previous_message["role"]
 
-        try:
+            # Only allow valid Groq roles
+            if role not in ("user", "assistant"):
+                continue
 
-            results = search_document(
-                request.document_id,
-                request.message,
-                top_k=8
+            messages.append(
+                {
+                    "role": role,
+                    "content": previous_message["content"],
+                }
             )
 
-            # ------------------------------------------
-            # Detect document-specific questions
-            # ------------------------------------------
+        # ==================================================
+        # RAG SEARCH
+        # ==================================================
 
-            document_words = [
-                "pdf", "document", "file", "this",
-                "summarize", "summary", "main topics",
-                "key points", "important concepts",
-                "explain", "list the key", "according to"
-            ]
+        document_context = ""
+        use_rag = False
 
-            message_lower = request.message.lower()
+        if request.document_id:
 
-            is_document_question = any(
-                word in message_lower
-                for word in document_words
-            )
+            try:
 
-            # ------------------------------------------
-            # For explicit PDF questions, use the best
-            # retrieved chunks even when similarity is
-            # slightly below the normal threshold.
-            # This is important for queries like:
-            # "Summarize this PDF".
-            # ------------------------------------------
-
-            if is_document_question:
-
-                relevant_results = results[:8]
-
-            else:
-
-                relevant_results = [
-                    result
-                    for result in results
-                    if (
-                        result.get("score", 0) >= 0.45
-                        or
-                        result.get("keyword_score", 0) >= 0.20
-                    )
-                ]
-
-            if relevant_results:
-
-                use_rag = True
-
-                document_context = "\n\n".join(
-
-                    result["text"]
-
-                    for result in relevant_results
-
+                results = search_document(
+                    request.document_id,
+                    user_message,
+                    top_k=8,
                 )
 
+                # ------------------------------------------
+                # Detect document-specific questions
+                # ------------------------------------------
 
-        except Exception as error:
+                document_words = [
+                    "pdf",
+                    "document",
+                    "file",
+                    "this",
+                    "summarize",
+                    "summary",
+                    "main topics",
+                    "key points",
+                    "important concepts",
+                    "explain",
+                    "list the key",
+                    "according to",
+                ]
 
-            print(
-                "RAG Search Error:",
-                error
-            )
+                message_lower = user_message.lower()
 
-            use_rag = False
+                is_document_question = any(
+                    word in message_lower
+                    for word in document_words
+                )
 
-    # ==================================================
-    # ADD RAG CONTEXT
-    # ==================================================
+                # ------------------------------------------
+                # Select relevant chunks
+                # ------------------------------------------
 
-    if use_rag:
+                if is_document_question:
 
-        messages.append({
+                    # For explicit document questions,
+                    # use the best retrieved chunks.
+                    relevant_results = results[:8]
 
-            "role": "system",
+                else:
 
-            "content": f"""
+                    relevant_results = [
+                        result
+                        for result in results
+                        if (
+                            result.get("score", 0) >= 0.45
+                            or
+                            result.get("keyword_score", 0) >= 0.20
+                        )
+                    ]
+
+                # ------------------------------------------
+                # Create document context
+                # ------------------------------------------
+
+                if relevant_results:
+
+                    use_rag = True
+
+                    document_context = "\n\n".join(
+                        result.get("text", "")
+                        for result in relevant_results
+                        if result.get("text")
+                    )
+
+            except Exception as error:
+
+                print(
+                    "RAG Search Error:",
+                    error,
+                )
+
+                use_rag = False
+                document_context = ""
+
+        # ==================================================
+        # ADD RAG CONTEXT
+        # ==================================================
+
+        if use_rag:
+
+            messages.append(
+                {
+                    "role": "system",
+                    "content": f"""
 The user has uploaded a document.
 
 The following information was retrieved
@@ -471,134 +524,157 @@ If the question is general or unrelated
 to the document, answer normally.
 
 Do not invent information from the document.
-"""
+""",
+                }
+            )
 
-        })
+        # ==================================================
+        # ADD CURRENT USER MESSAGE
+        # IMPORTANT:
+        # This is added ONLY ONCE.
+        # ==================================================
 
-    # ==================================================
-    # ADD CONVERSATION HISTORY
-    # ==================================================
-
-    for message in previous_messages:
-
-        messages.append({
-
-            "role": message["role"],
-
-            "content": message["content"]
-
-        })
-
-    # ==================================================
-    # GROQ
-    # ==================================================
-
-    try:
-
-        response = client.chat.completions.create(
-
-            model="openai/gpt-oss-120b",
-
-            messages=messages,
-
-            temperature=0.3,
-
-            max_tokens=700
-
+        messages.append(
+            {
+                "role": "user",
+                "content": user_message,
+            }
         )
 
-        ai_response = (
+        # ==================================================
+        # GROQ
+        # ==================================================
 
-            response
-            .choices[0]
-            .message
-            .content
-            .strip()
+        try:
 
+            response = client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=messages,
+                temperature=0.3,
+                max_tokens=700,
+            )
+
+            ai_response = (
+                response
+                .choices[0]
+                .message
+                .content
+                .strip()
+            )
+
+            if not ai_response:
+                ai_response = (
+                    "Sorry, I couldn't generate a response."
+                )
+
+        except Exception as error:
+
+            print(
+                "Groq Error:",
+                error,
+            )
+
+            connection.rollback()
+
+            return {
+                "chat_id": chat_id,
+                "response": "Sorry, something went wrong while generating the response.",
+                "used_rag": use_rag,
+            }
+
+        # ==================================================
+        # SAVE USER MESSAGE
+        # ==================================================
+
+        cursor.execute(
+            """
+            INSERT INTO messages
+            (chat_id, role, content)
+            VALUES (?, ?, ?)
+            """,
+            (
+                chat_id,
+                "user",
+                user_message,
+            ),
         )
+
+        # ==================================================
+        # SAVE AI RESPONSE
+        # ==================================================
+
+        cursor.execute(
+            """
+            INSERT INTO messages
+            (chat_id, role, content)
+            VALUES (?, ?, ?)
+            """,
+            (
+                chat_id,
+                "assistant",
+                ai_response,
+            ),
+        )
+
+        # ==================================================
+        # UPDATE CHAT TITLE
+        # ==================================================
+
+        title = user_message[:40].strip()
+
+        if len(user_message) > 40:
+            title += "..."
+
+        cursor.execute(
+            """
+            UPDATE chats
+            SET title = ?
+            WHERE id = ?
+            AND title = 'New Chat'
+            """,
+            (
+                title,
+                chat_id,
+            ),
+        )
+
+        # ==================================================
+        # COMMIT
+        # ==================================================
+
+        connection.commit()
+
+        # ==================================================
+        # RETURN
+        # ==================================================
+
+        return {
+            "chat_id": chat_id,
+            "response": ai_response,
+            "used_rag": use_rag,
+        }
+
+    except HTTPException:
+        connection.rollback()
+        raise
 
     except Exception as error:
 
+        connection.rollback()
+
         print(
-            "Groq Error:",
-            error
+            "Chat Error:",
+            error,
         )
 
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to process chat.",
+        )
+
+    finally:
         connection.close()
 
-        return {
-
-            "chat_id": chat_id,
-
-            "response":
-                "Sorry, something went wrong."
-
-        }
-
-    # ==================================================
-    # SAVE AI RESPONSE
-    # ==================================================
-
-    cursor.execute(
-
-        """
-        INSERT INTO messages
-        (chat_id, role, content)
-        VALUES (?, ?, ?)
-        """,
-
-        (
-            chat_id,
-            "assistant",
-            ai_response
-        )
-
-    )
-
-    # ==================================================
-    # UPDATE CHAT TITLE
-    # ==================================================
-
-    cursor.execute(
-
-        """
-        UPDATE chats
-        SET title = ?
-        WHERE id = ?
-        AND title = 'New Chat'
-        """,
-
-        (
-            request.message[:40],
-            chat_id
-        )
-
-    )
-
-    # ==================================================
-    # COMMIT
-    # ==================================================
-
-    connection.commit()
-
-    connection.close()
-
-    # ==================================================
-    # RETURN
-    # ==================================================
-
-    return {
-
-        "chat_id":
-            chat_id,
-
-        "response":
-            ai_response,
-
-        "used_rag":
-            use_rag
-
-    }
 
 # ==================================================
 # PDF UPLOAD + RAG
@@ -606,7 +682,7 @@ Do not invent information from the document.
 
 @app.post("/upload")
 async def upload_pdf(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
 ):
 
     # ==================================================
@@ -616,14 +692,20 @@ async def upload_pdf(
     if file.content_type != "application/pdf":
 
         return {
-
             "success": False,
-
-            "message":
-                "Only PDF files are allowed."
-
+            "message": "Only PDF files are allowed.",
         }
 
+    # ==================================================
+    # Check filename
+    # ==================================================
+
+    if not file.filename:
+
+        return {
+            "success": False,
+            "message": "Invalid file name.",
+        }
 
     # ==================================================
     # Generate Document ID
@@ -633,7 +715,6 @@ async def upload_pdf(
         uuid.uuid4()
     )
 
-
     # ==================================================
     # Secure File Name
     # ==================================================
@@ -642,19 +723,14 @@ async def upload_pdf(
         file.filename
     )
 
-
     # ==================================================
     # File Path
     # ==================================================
 
     file_path = os.path.join(
-
         UPLOAD_DIR,
-
-        f"{document_id}_{filename}"
-
+        f"{document_id}_{filename}",
     )
-
 
     # ==================================================
     # Save PDF
@@ -664,30 +740,25 @@ async def upload_pdf(
 
         with open(
             file_path,
-            "wb"
+            "wb",
         ) as buffer:
 
             shutil.copyfileobj(
                 file.file,
-                buffer
+                buffer,
             )
 
     except Exception as error:
 
         print(
             "File Save Error:",
-            error
+            error,
         )
 
         return {
-
             "success": False,
-
-            "message":
-                "Failed to save PDF."
-
+            "message": "Failed to save PDF.",
         }
-
 
     # ==================================================
     # Read PDF + Extract Text
@@ -698,17 +769,26 @@ async def upload_pdf(
 
     try:
 
-        pdf_document = pymupdf.open(file_path)
+        pdf_document = pymupdf.open(
+            file_path
+        )
 
-        total_pages = len(pdf_document)
+        total_pages = len(
+            pdf_document
+        )
 
-        for page_number, page in enumerate(pdf_document):
+        for page_number, page in enumerate(
+            pdf_document
+        ):
 
             try:
 
-                page_text = page.get_text("text")
+                page_text = page.get_text(
+                    "text"
+                )
 
                 if page_text:
+
                     text += page_text
                     text += "\n"
 
@@ -716,7 +796,7 @@ async def upload_pdf(
 
                 print(
                     f"PDF Page {page_number + 1} Error:",
-                    page_error
+                    page_error,
                 )
 
         pdf_document.close()
@@ -725,15 +805,22 @@ async def upload_pdf(
 
         print(
             "PDF Read Error:",
-            error
+            error,
         )
+
+        # Cleanup file
+        try:
+
+            if os.path.exists(file_path):
+                os.remove(file_path)
+
+        except Exception:
+            pass
 
         return {
             "success": False,
-            "message":
-                "Failed to read PDF."
+            "message": "Failed to read PDF.",
         }
-
 
     # ==================================================
     # Clean Extracted Text
@@ -741,14 +828,12 @@ async def upload_pdf(
 
     text = text.strip()
 
-
     # ==================================================
     # Check Extracted Text
     # ==================================================
 
     if not text:
 
-        # Remove saved PDF because processing failed.
         try:
 
             if os.path.exists(file_path):
@@ -758,16 +843,17 @@ async def upload_pdf(
 
             print(
                 "PDF Cleanup Error:",
-                cleanup_error
+                cleanup_error,
             )
 
         return {
             "success": False,
-            "message":
+            "message": (
                 "Could not extract text from this PDF. "
-                "The PDF may be scanned/image-based or contain no selectable text."
+                "The PDF may be scanned/image-based or "
+                "contain no selectable text."
+            ),
         }
-
 
     # ==================================================
     # Create RAG Vector Index
@@ -776,54 +862,41 @@ async def upload_pdf(
     try:
 
         rag_result = create_vector_index(
-
             document_id,
-
-            text
-
+            text,
         )
 
     except Exception as error:
 
         print(
             "RAG Index Error:",
-            error
+            error,
         )
 
+        # Cleanup PDF if RAG processing fails
+        try:
+
+            if os.path.exists(file_path):
+                os.remove(file_path)
+
+        except Exception:
+            pass
+
         return {
-
             "success": False,
-
-            "message":
-                "Failed to create RAG index."
-
+            "message": "Failed to create RAG index.",
         }
-
 
     # ==================================================
     # Return
     # ==================================================
 
     return {
-
         "success": True,
-
-        "document_id":
-            document_id,
-
-        "filename":
-            filename,
-
-        "pages":
-            total_pages,
-
-        "text_length":
-            len(text),
-
-        "chunks":
-            rag_result["chunks"],
-
-        "message":
-            "PDF processed successfully."
-
+        "document_id": document_id,
+        "filename": filename,
+        "pages": total_pages,
+        "text_length": len(text),
+        "chunks": rag_result.get("chunks", 0),
+        "message": "PDF processed successfully.",
     }

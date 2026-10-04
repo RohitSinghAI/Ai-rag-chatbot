@@ -82,7 +82,6 @@ function formatAIResponse(text) {
 
                 inCodeBlock = false;
 
-
                 const codeWrapper =
                     document.createElement("div");
 
@@ -142,7 +141,9 @@ function formatAIResponse(text) {
 
                 codeWrapper.appendChild(code);
 
-                codeWrapper.appendChild(copyButton);
+                codeWrapper.appendChild(
+                    copyButton
+                );
 
                 container.appendChild(
                     codeWrapper
@@ -270,7 +271,9 @@ function formatAIResponse(text) {
 
             bullet.appendChild(content);
 
-            container.appendChild(bullet);
+            container.appendChild(
+                bullet
+            );
 
             return;
         }
@@ -316,7 +319,9 @@ function formatAIResponse(text) {
 
             numbered.appendChild(content);
 
-            container.appendChild(numbered);
+            container.appendChild(
+                numbered
+            );
 
             return;
         }
@@ -329,10 +334,12 @@ function formatAIResponse(text) {
         const paragraph =
             document.createElement("div");
 
+
         addInlineFormatting(
             paragraph,
             line
         );
+
 
         container.appendChild(
             paragraph
@@ -363,7 +370,6 @@ function addInlineFormatting(
     parts.forEach(part => {
 
         // Bold
-
         if (
             part.startsWith("**") &&
             part.endsWith("**")
@@ -384,7 +390,6 @@ function addInlineFormatting(
 
 
         // Inline code
-
         if (
             part.startsWith("`") &&
             part.endsWith("`")
@@ -405,7 +410,6 @@ function addInlineFormatting(
 
 
         // Italic
-
         if (
             part.startsWith("*") &&
             part.endsWith("*")
@@ -434,7 +438,7 @@ function addInlineFormatting(
 
 
 // ==================================================
-// ADD USER MESSAGE
+// ADD MESSAGE
 // ==================================================
 
 function addMessage(
@@ -453,7 +457,6 @@ function addMessage(
 
 
     // Avatar
-
     const avatar =
         document.createElement("div");
 
@@ -467,7 +470,6 @@ function addMessage(
 
 
     // Content
-
     const contentWrapper =
         document.createElement("div");
 
@@ -476,7 +478,6 @@ function addMessage(
 
 
     // Bubble
-
     const bubble =
         document.createElement("div");
 
@@ -504,7 +505,6 @@ function addMessage(
 
 
     // Time
-
     const time =
         document.createElement("div");
 
@@ -534,6 +534,7 @@ function addMessage(
         contentWrapper
     );
 
+
     messagesBox.appendChild(
         messageDiv
     );
@@ -561,7 +562,6 @@ function addAIMessage(
 
 
     // Avatar
-
     const avatar =
         document.createElement("div");
 
@@ -573,7 +573,6 @@ function addAIMessage(
 
 
     // Content
-
     const contentWrapper =
         document.createElement("div");
 
@@ -582,12 +581,12 @@ function addAIMessage(
 
 
     // Bubble
-
     const bubble =
         document.createElement("div");
 
     bubble.className =
         "bubble";
+
 
     bubble.appendChild(
         formatAIResponse(text)
@@ -595,7 +594,6 @@ function addAIMessage(
 
 
     // Actions
-
     const actions =
         document.createElement("div");
 
@@ -604,7 +602,6 @@ function addAIMessage(
 
 
     // Copy
-
     const copyButton =
         document.createElement("button");
 
@@ -654,7 +651,6 @@ function addAIMessage(
 
 
     // RAG status
-
     const ragStatus =
         document.createElement("span");
 
@@ -681,7 +677,6 @@ function addAIMessage(
 
 
     // Time
-
     const time =
         document.createElement("div");
 
@@ -697,8 +692,6 @@ function addAIMessage(
             }
         );
 
-
-    // Append
 
     contentWrapper.appendChild(
         bubble
@@ -720,6 +713,7 @@ function addAIMessage(
     messageDiv.appendChild(
         contentWrapper
     );
+
 
     messagesBox.appendChild(
         messageDiv
@@ -788,6 +782,7 @@ function removeLoading() {
             "loading-message"
         );
 
+
     if (loading) {
 
         loading.remove();
@@ -807,7 +802,34 @@ async function sendMessage() {
 
 
     if (!message) {
+
         return;
+
+    }
+
+
+    // ==================================================
+    // IMPORTANT CHAT FIX
+    // ==================================================
+
+    // If no current chat exists,
+    // create one before sending message.
+
+    if (currentChatId === null) {
+
+        await createNewChat(false);
+
+    }
+
+
+    if (currentChatId === null) {
+
+        console.error(
+            "Chat ID is still null"
+        );
+
+        return;
+
     }
 
 
@@ -819,7 +841,6 @@ async function sendMessage() {
 
 
     // User message
-
     addMessage(
         "user",
         message
@@ -848,8 +869,10 @@ async function sendMessage() {
 
                     body: JSON.stringify({
 
+                        // IMPORTANT
+                        // Always send current chat ID
                         chat_id:
-                            currentChatId,
+                            Number(currentChatId),
 
                         message:
                             message,
@@ -875,8 +898,13 @@ async function sendMessage() {
             await response.json();
 
 
+        // ==================================================
+        // IMPORTANT
+        // Keep returned chat ID
+        // ==================================================
+
         currentChatId =
-            data.chat_id;
+            Number(data.chat_id);
 
 
         removeLoading();
@@ -888,7 +916,8 @@ async function sendMessage() {
         );
 
 
-        loadChats();
+        // Refresh sidebar
+        await loadChats();
 
 
     } catch (error) {
@@ -916,15 +945,18 @@ async function sendMessage() {
     sendButton.disabled =
         false;
 
+
     input.focus();
 }
 
 
 // ==================================================
-// NEW CHAT
+// CREATE NEW CHAT
 // ==================================================
 
-async function createNewChat() {
+async function createNewChat(
+    showWelcome = true
+) {
 
     try {
 
@@ -950,33 +982,49 @@ async function createNewChat() {
             await response.json();
 
 
+        // ==================================================
+        // IMPORTANT
+        // Set current chat ID
+        // ==================================================
+
         currentChatId =
-            data.chat_id;
+            Number(data.chat_id);
 
 
         // Remove old PDF context
-
         currentDocumentId =
             null;
 
 
-        uploadStatus.textContent =
-            "";
+        if (uploadStatus) {
+
+            uploadStatus.textContent =
+                "";
+
+        }
 
 
         messagesBox.innerHTML =
             "";
 
 
-        addMessage(
-            "assistant",
-            "Hello! 👋 How can I help you today?"
-        );
+        if (showWelcome) {
+
+            addMessage(
+                "assistant",
+                "Hello! 👋 How can I help you today?"
+            );
+
+        }
 
 
-        loadChats();
+        await loadChats();
+
 
         input.focus();
+
+
+        return currentChatId;
 
 
     } catch (error) {
@@ -985,6 +1033,13 @@ async function createNewChat() {
             "New Chat Error:",
             error
         );
+
+
+        currentChatId =
+            null;
+
+
+        return null;
 
     }
 }
@@ -1093,7 +1148,7 @@ function formatChatTime(
 
 
 // ==================================================
-// DELETE CHAT FROM UI
+// REMOVE CHAT FROM UI
 // ==================================================
 
 function removeChatFromUI(
@@ -1101,15 +1156,19 @@ function removeChatFromUI(
 ) {
 
     if (!chatElement) {
+
         return;
+
     }
 
 
     chatElement.style.transition =
         "all 0.2s ease";
 
+
     chatElement.style.opacity =
         "0";
+
 
     chatElement.style.transform =
         "translateX(-10px)";
@@ -1120,6 +1179,95 @@ function removeChatFromUI(
         chatElement.remove();
 
     }, 200);
+}
+
+
+// ==================================================
+// DELETE CHAT
+// ==================================================
+
+async function deleteChat(
+    chatId,
+    chatElement = null
+) {
+
+    try {
+
+        const response =
+            await fetch(
+                `${API_URL}/chats/${chatId}`,
+                {
+                    method: "DELETE"
+                }
+            );
+
+
+        if (!response.ok) {
+
+            throw new Error(
+                `HTTP ${response.status}`
+            );
+
+        }
+
+
+        const data =
+            await response.json();
+
+
+        if (!data.success) {
+
+            throw new Error(
+                data.message ||
+                "Failed to delete chat"
+            );
+
+        }
+
+
+        // Remove from UI
+        if (chatElement) {
+
+            removeChatFromUI(
+                chatElement
+            );
+
+        }
+
+
+        // If current chat was deleted
+        if (
+            Number(currentChatId) ===
+            Number(chatId)
+        ) {
+
+            currentChatId =
+                null;
+
+            currentDocumentId =
+                null;
+
+            messagesBox.innerHTML =
+                "";
+
+
+            await initializeChat();
+
+        } else {
+
+            await loadChats();
+
+        }
+
+
+    } catch (error) {
+
+        console.error(
+            "Delete Chat Error:",
+            error
+        );
+
+    }
 }
 
 
@@ -1139,11 +1287,10 @@ async function loadChats() {
 
         if (!response.ok) {
 
-            console.error(
+            throw new Error(
                 "Failed to load chats"
             );
 
-            return;
         }
 
 
@@ -1158,7 +1305,9 @@ async function loadChats() {
 
 
         if (!container) {
+
             return;
+
         }
 
 
@@ -1174,41 +1323,50 @@ async function loadChats() {
             const empty =
                 document.createElement("div");
 
+
             empty.textContent =
                 "No recent chats";
+
 
             empty.style.padding =
                 "15px 10px";
 
+
             empty.style.color =
                 "#718096";
 
+
             empty.style.fontSize =
                 "12px";
+
 
             container.appendChild(
                 empty
             );
 
+
             return;
+
         }
 
 
         chats.forEach(chat => {
 
             // ======================================
-            // Chat item
+            // Chat Item
             // ======================================
 
             const item =
                 document.createElement("div");
 
+
             item.className =
                 "recent-chat";
 
 
+            // Active chat
             if (
-                currentChatId &&
+                currentChatId !== null &&
                 Number(currentChatId) ===
                 Number(chat.id)
             ) {
@@ -1227,8 +1385,10 @@ async function loadChats() {
             const icon =
                 document.createElement("div");
 
+
             icon.className =
                 "chat-history-icon";
+
 
             icon.textContent =
                 "💬";
@@ -1241,6 +1401,7 @@ async function loadChats() {
             const content =
                 document.createElement("div");
 
+
             content.className =
                 "chat-history-content";
 
@@ -1248,20 +1409,23 @@ async function loadChats() {
             const title =
                 document.createElement("div");
 
+
             title.className =
                 "chat-history-title";
 
+
             title.textContent =
                 chat.title ||
-                chat.name ||
                 "New Chat";
 
 
             const time =
                 document.createElement("div");
 
+
             time.className =
                 "chat-history-time";
+
 
             time.textContent =
                 formatChatTime(
@@ -1273,6 +1437,7 @@ async function loadChats() {
             content.appendChild(
                 title
             );
+
 
             content.appendChild(
                 time
@@ -1286,14 +1451,18 @@ async function loadChats() {
             const deleteButton =
                 document.createElement("button");
 
+
             deleteButton.className =
                 "delete-chat-btn";
+
 
             deleteButton.type =
                 "button";
 
+
             deleteButton.title =
                 "Delete chat";
+
 
             deleteButton.textContent =
                 "🗑";
@@ -1301,76 +1470,15 @@ async function loadChats() {
 
             deleteButton.addEventListener(
                 "click",
-                async function (event) {
+                function(event) {
 
                     event.stopPropagation();
 
-                    const chatId = chat.id;
 
-                    const confirmed = confirm(
-                        "Are you sure you want to delete this chat?"
+                    deleteChat(
+                        chat.id,
+                        item
                     );
-
-                    if (!confirmed) {
-                        return;
-                    }
-
-                    try {
-
-                        const response = await fetch(
-                            `${API_URL}/chats/${chatId}`,
-                            {
-                                method: "DELETE"
-                            }
-                        );
-
-                        const data = await response.json();
-
-                        if (!response.ok || !data.success) {
-                            throw new Error(
-                                data.message || "Failed to delete chat"
-                            );
-                        }
-
-                        // Agar currently open chat delete hui
-                        if (
-                            currentChatId &&
-                            Number(currentChatId) === Number(chatId)
-                        ) {
-
-                            currentChatId = null;
-                            currentDocumentId = null;
-
-                            messagesBox.innerHTML = "";
-
-                            addMessage(
-                                "assistant",
-                                "Hello! 👋 How can I help you today?"
-                            );
-                        }
-
-                        // UI se remove
-                        removeChatFromUI(item);
-
-                        // Database se fresh history load
-                        await loadChats();
-
-                        console.log(
-                            "Chat deleted successfully:",
-                            chatId
-                        );
-
-                    } catch (error) {
-
-                        console.error(
-                            "Delete Chat Error:",
-                            error
-                        );
-
-                        alert(
-                            "Failed to delete chat. Please try again."
-                        );
-                    }
 
                 }
             );
@@ -1382,7 +1490,7 @@ async function loadChats() {
 
             item.addEventListener(
                 "click",
-                function () {
+                function() {
 
                     loadChat(
                         chat.id
@@ -1396,9 +1504,11 @@ async function loadChats() {
                 icon
             );
 
+
             item.appendChild(
                 content
             );
+
 
             item.appendChild(
                 deleteButton
@@ -1452,18 +1562,26 @@ async function loadChat(
             await response.json();
 
 
+        // ==================================================
+        // IMPORTANT
+        // Set current chat
+        // ==================================================
+
         currentChatId =
-            chatId;
+            Number(chatId);
 
 
         // Reset document context
-
         currentDocumentId =
             null;
 
 
-        uploadStatus.textContent =
-            "";
+        if (uploadStatus) {
+
+            uploadStatus.textContent =
+                "";
+
+        }
 
 
         messagesBox.innerHTML =
@@ -1473,16 +1591,30 @@ async function loadChat(
         messages.forEach(
             message => {
 
-                addMessage(
-                    message.role,
-                    message.content
-                );
+                if (
+                    message.role ===
+                    "assistant"
+                ) {
+
+                    addAIMessage(
+                        message.content
+                    );
+
+                } else {
+
+                    addMessage(
+                        "user",
+                        message.content
+                    );
+
+                }
 
             }
         );
 
 
-        loadChats();
+        await loadChats();
+
 
         input.focus();
 
@@ -1491,6 +1623,77 @@ async function loadChat(
 
         console.error(
             "Load Chat Error:",
+            error
+        );
+
+    }
+}
+
+
+// ==================================================
+// INITIALIZE CHAT
+// ==================================================
+
+async function initializeChat() {
+
+    try {
+
+        const response =
+            await fetch(
+                `${API_URL}/chats`
+            );
+
+
+        if (!response.ok) {
+
+            throw new Error(
+                "Failed to load chats"
+            );
+
+        }
+
+
+        const chats =
+            await response.json();
+
+
+        // ==================================================
+        // EXISTING CHAT FOUND
+        // ==================================================
+
+        if (
+            chats &&
+            chats.length > 0
+        ) {
+
+            // Backend returns newest first
+            const latestChat =
+                chats[0];
+
+
+            await loadChat(
+                latestChat.id
+            );
+
+
+            return;
+
+        }
+
+
+        // ==================================================
+        // NO CHAT FOUND
+        // ==================================================
+
+        await createNewChat(
+            true
+        );
+
+
+    } catch (error) {
+
+        console.error(
+            "Initialize Chat Error:",
             error
         );
 
@@ -1511,6 +1714,7 @@ function updateDocumentUI(
         document.getElementById(
             "documentName"
         );
+
 
     const documentSize =
         document.getElementById(
@@ -1554,229 +1758,263 @@ function updateDocumentUI(
 // PDF UPLOAD BUTTON
 // ==================================================
 
-uploadButton.addEventListener(
-    "click",
-    () => {
+if (uploadButton && pdfInput) {
 
-        pdfInput.click();
+    uploadButton.addEventListener(
+        "click",
+        () => {
 
-    }
-);
+            pdfInput.click();
+
+        }
+    );
+
+}
 
 
 // ==================================================
 // PDF UPLOAD
 // ==================================================
 
-pdfInput.addEventListener(
-    "change",
-    async () => {
+if (pdfInput) {
 
-        const file =
-            pdfInput.files[0];
+    pdfInput.addEventListener(
+        "change",
+        async () => {
 
-
-        if (!file) {
-            return;
-        }
+            const file =
+                pdfInput.files[0];
 
 
-        // ==========================================
-        // PDF CHECK
-        // ==========================================
+            if (!file) {
 
-        if (
-            file.type !==
-            "application/pdf"
-        ) {
+                return;
+
+            }
+
+
+            // ==========================================
+            // PDF CHECK
+            // ==========================================
+
+            if (
+                file.type !==
+                "application/pdf"
+            ) {
+
+                uploadStatus.textContent =
+                    "❌ Only PDF files are allowed.";
+
+
+                pdfInput.value =
+                    "";
+
+
+                return;
+
+            }
+
+
+            // ==========================================
+            // Loading
+            // ==========================================
 
             uploadStatus.textContent =
-                "❌ Only PDF files are allowed.";
+                "⏳ Processing PDF...";
+
+
+            uploadButton.disabled =
+                true;
+
+
+            // ==========================================
+            // FormData
+            // ==========================================
+
+            const formData =
+                new FormData();
+
+
+            formData.append(
+                "file",
+                file
+            );
+
+
+            try {
+
+                const response =
+                    await fetch(
+                        `${API_URL}/upload`,
+                        {
+                            method: "POST",
+                            body: formData
+                        }
+                    );
+
+
+                if (!response.ok) {
+
+                    throw new Error(
+                        `HTTP ${response.status}`
+                    );
+
+                }
+
+
+                const data =
+                    await response.json();
+
+
+                // ======================================
+                // Backend Error
+                // ======================================
+
+                if (!data.success) {
+
+                    uploadStatus.textContent =
+                        `❌ ${data.message}`;
+
+
+                    return;
+
+                }
+
+
+                // ======================================
+                // Save Document ID
+                // ======================================
+
+                currentDocumentId =
+                    data.document_id;
+
+
+                // ======================================
+                // Update UI
+                // ======================================
+
+                updateDocumentUI(
+                    data.filename,
+                    file.size
+                );
+
+
+                uploadStatus.textContent =
+                    `✅ ${data.filename} uploaded`;
+
+
+                // ======================================
+                // Upload Message
+                // ======================================
+
+                addMessage(
+                    "assistant",
+                    `📄 **${data.filename}** is ready.\n\n${data.pages} page(s) processed and ${data.chunks} chunks created.\n\nYou can now ask questions about this document.`
+                );
+
+
+            } catch (error) {
+
+                console.error(
+                    "Upload Error:",
+                    error
+                );
+
+
+                uploadStatus.textContent =
+                    "❌ PDF upload failed.";
+
+            }
+
+
+            // ==========================================
+            // Enable Upload
+            // ==========================================
+
+            uploadButton.disabled =
+                false;
+
+
+            // ==========================================
+            // Reset File Input
+            // ==========================================
 
             pdfInput.value =
                 "";
 
-            return;
         }
+    );
 
-
-        // ==========================================
-        // Loading
-        // ==========================================
-
-        uploadStatus.textContent =
-            "⏳ Processing PDF...";
-
-        uploadButton.disabled =
-            true;
-
-
-        // ==========================================
-        // FormData
-        // ==========================================
-
-        const formData =
-            new FormData();
-
-
-        formData.append(
-            "file",
-            file
-        );
-
-
-        try {
-
-            const response =
-                await fetch(
-                    `${API_URL}/upload`,
-                    {
-                        method: "POST",
-                        body: formData
-                    }
-                );
-
-
-            if (!response.ok) {
-
-                throw new Error(
-                    `HTTP ${response.status}`
-                );
-
-            }
-
-
-            const data =
-                await response.json();
-
-
-            // ======================================
-            // Backend Error
-            // ======================================
-
-            if (!data.success) {
-
-                uploadStatus.textContent =
-                    `❌ ${data.message}`;
-
-                return;
-            }
-
-
-            // ======================================
-            // Save Document ID
-            // ======================================
-
-            currentDocumentId =
-                data.document_id;
-
-
-            // ======================================
-            // Update Right Panel
-            // ======================================
-
-            updateDocumentUI(
-                data.filename,
-                file.size
-            );
-
-
-            // ======================================
-            // Upload Status
-            // ======================================
-
-            uploadStatus.textContent =
-                `✅ ${data.filename} uploaded`;
-
-
-            // ======================================
-            // Show Upload Message
-            // ======================================
-
-            addMessage(
-                "assistant",
-                `📄 **${data.filename}** is ready.\n\n${data.pages} page(s) processed and ${data.chunks} chunks created.\n\nYou can now ask questions about this document.`
-            );
-
-
-        } catch (error) {
-
-            console.error(
-                "Upload Error:",
-                error
-            );
-
-
-            uploadStatus.textContent =
-                "❌ PDF upload failed.";
-
-        }
-
-
-        // ==========================================
-        // Enable Upload
-        // ==========================================
-
-        uploadButton.disabled =
-            false;
-
-
-        // ==========================================
-        // Reset File Input
-        // ==========================================
-
-        pdfInput.value =
-            "";
-
-    }
-);
+}
 
 
 // ==================================================
 // SEND BUTTON
 // ==================================================
 
-sendButton.addEventListener(
-    "click",
-    sendMessage
-);
+if (sendButton) {
+
+    sendButton.addEventListener(
+        "click",
+        sendMessage
+    );
+
+}
 
 
 // ==================================================
 // NEW CHAT BUTTON
 // ==================================================
 
-newChatButton.addEventListener(
-    "click",
-    createNewChat
-);
+if (newChatButton) {
+
+    newChatButton.addEventListener(
+        "click",
+        async () => {
+
+            await createNewChat(
+                true
+            );
+
+        }
+    );
+
+}
 
 
 // ==================================================
 // ENTER KEY
 // ==================================================
 
-input.addEventListener(
-    "keydown",
-    function (event) {
+if (input) {
 
-        if (
-            event.key === "Enter" &&
-            !event.shiftKey
-        ) {
+    input.addEventListener(
+        "keydown",
+        function(event) {
 
-            event.preventDefault();
+            if (
+                event.key === "Enter" &&
+                !event.shiftKey
+            ) {
 
-            sendMessage();
+                event.preventDefault();
+
+                sendMessage();
+
+            }
 
         }
+    );
 
-    }
-);
+}
 
 
 // ==================================================
 // INITIAL LOAD
 // ==================================================
 
-loadChats();
+// IMPORTANT:
+// Do NOT call loadChats() here.
+// We need to set currentChatId first.
+
+initializeChat();
