@@ -2,37 +2,22 @@
 // DOM ELEMENTS
 // ==================================================
 
-const input =
-    document.getElementById("messageInput");
+const input = document.getElementById("messageInput");
+const sendButton = document.getElementById("sendButton");
+const messagesBox = document.getElementById("messages");
+const newChatButton = document.getElementById("newChat");
+const recentChats = document.getElementById("recentChats");
 
-const sendButton =
-    document.getElementById("sendButton");
-
-const messagesBox =
-    document.getElementById("messages");
-
-const newChatButton =
-    document.getElementById("newChat");
-
-const recentChats =
-    document.getElementById("recentChats");
-
-const pdfInput =
-    document.getElementById("pdfInput");
-
-const uploadButton =
-    document.getElementById("uploadButton");
-
-const uploadStatus =
-    document.getElementById("uploadStatus");
+const pdfInput = document.getElementById("pdfInput");
+const uploadButton = document.getElementById("uploadButton");
+const uploadStatus = document.getElementById("uploadStatus");
 
 
 // ==================================================
 // BACKEND URL
 // ==================================================
 
-const API_URL =
-    "http://127.0.0.1:8000";
+const API_URL = "http://127.0.0.1:8000";
 
 
 // ==================================================
@@ -50,26 +35,144 @@ let currentDocumentId = null;
 
 
 // ==================================================
+// REQUEST STATE
+// ==================================================
+
+let isSending = false;
+let isUploading = false;
+
+
+// ==================================================
+// API ERROR HELPER
+// ==================================================
+
+async function getErrorMessage(response) {
+    try {
+        const data = await response.json();
+
+        return (
+            data.detail ||
+            data.message ||
+            `Request failed with HTTP ${response.status}`
+        );
+    } catch (error) {
+        return `Request failed with HTTP ${response.status}`;
+    }
+}
+
+
+// ==================================================
+// SCROLL TO BOTTOM
+// ==================================================
+
+function scrollMessagesToBottom() {
+    if (!messagesBox) {
+        return;
+    }
+
+    messagesBox.scrollTop = messagesBox.scrollHeight;
+}
+
+
+// ==================================================
+// INLINE MARKDOWN
+// ==================================================
+
+function addInlineFormatting(container, text) {
+
+    if (!container) {
+        return;
+    }
+
+    const value = String(text || "");
+
+    const parts = value.split(
+        /(\*\*.*?\*\*|`.*?`|\*.*?\*)/g
+    );
+
+    parts.forEach((part) => {
+
+        if (!part) {
+            return;
+        }
+
+        // Bold
+        if (
+            part.startsWith("**") &&
+            part.endsWith("**") &&
+            part.length >= 4
+        ) {
+
+            const bold = document.createElement("strong");
+
+            bold.textContent = part.slice(2, -2);
+
+            container.appendChild(bold);
+
+            return;
+        }
+
+
+        // Inline code
+        if (
+            part.startsWith("`") &&
+            part.endsWith("`") &&
+            part.length >= 2
+        ) {
+
+            const code = document.createElement("code");
+
+            code.textContent = part.slice(1, -1);
+
+            container.appendChild(code);
+
+            return;
+        }
+
+
+        // Italic
+        if (
+            part.startsWith("*") &&
+            part.endsWith("*") &&
+            !part.startsWith("**") &&
+            part.length >= 2
+        ) {
+
+            const italic = document.createElement("em");
+
+            italic.textContent = part.slice(1, -1);
+
+            container.appendChild(italic);
+
+            return;
+        }
+
+
+        container.appendChild(
+            document.createTextNode(part)
+        );
+    });
+}
+
+
+// ==================================================
 // FORMAT AI RESPONSE
 // ==================================================
 
 function formatAIResponse(text) {
 
-    const container =
-        document.createElement("div");
+    const container = document.createElement("div");
 
-    const lines =
-        String(text || "").split("\n");
+    const lines = String(text || "").split("\n");
 
     let inCodeBlock = false;
     let codeContent = "";
 
-
     lines.forEach((line) => {
 
-        // ==========================================
+        // ==================================================
         // CODE BLOCK
-        // ==========================================
+        // ==================================================
 
         if (line.trim().startsWith("```")) {
 
@@ -88,23 +191,23 @@ function formatAIResponse(text) {
                 codeWrapper.className =
                     "code-wrapper";
 
-
                 const code =
                     document.createElement("pre");
 
                 code.textContent =
-                    codeContent;
-
+                    codeContent.replace(/\n$/, "");
 
                 const copyButton =
                     document.createElement("button");
 
+                copyButton.type = "button";
+
                 copyButton.className =
                     "copy-code-btn";
 
-                copyButton.textContent =
-                    "Copy";
+                copyButton.textContent = "Copy";
 
+                const codeToCopy = codeContent;
 
                 copyButton.addEventListener(
                     "click",
@@ -113,7 +216,7 @@ function formatAIResponse(text) {
                         try {
 
                             await navigator.clipboard.writeText(
-                                codeContent
+                                codeToCopy
                             );
 
                             copyButton.textContent =
@@ -134,43 +237,34 @@ function formatAIResponse(text) {
                             );
 
                         }
-
                     }
                 );
 
-
                 codeWrapper.appendChild(code);
+                codeWrapper.appendChild(copyButton);
 
-                codeWrapper.appendChild(
-                    copyButton
-                );
-
-                container.appendChild(
-                    codeWrapper
-                );
-
+                container.appendChild(codeWrapper);
             }
 
             return;
         }
 
 
-        // ==========================================
+        // ==================================================
         // INSIDE CODE BLOCK
-        // ==========================================
+        // ==================================================
 
         if (inCodeBlock) {
 
-            codeContent +=
-                line + "\n";
+            codeContent += line + "\n";
 
             return;
         }
 
 
-        // ==========================================
+        // ==================================================
         // EMPTY LINE
-        // ==========================================
+        // ==================================================
 
         if (line.trim() === "") {
 
@@ -182,9 +276,9 @@ function formatAIResponse(text) {
         }
 
 
-        // ==========================================
+        // ==================================================
         // HEADINGS
-        // ==========================================
+        // ==================================================
 
         if (line.startsWith("### ")) {
 
@@ -194,9 +288,7 @@ function formatAIResponse(text) {
             heading.textContent =
                 line.substring(4);
 
-            container.appendChild(
-                heading
-            );
+            container.appendChild(heading);
 
             return;
         }
@@ -210,9 +302,7 @@ function formatAIResponse(text) {
             heading.textContent =
                 line.substring(3);
 
-            container.appendChild(
-                heading
-            );
+            container.appendChild(heading);
 
             return;
         }
@@ -226,21 +316,21 @@ function formatAIResponse(text) {
             heading.textContent =
                 line.substring(2);
 
-            container.appendChild(
-                heading
-            );
+            container.appendChild(heading);
 
             return;
         }
 
 
-        // ==========================================
+        // ==================================================
         // BULLET
-        // ==========================================
+        // ==================================================
+
+        const trimmedLine = line.trim();
 
         if (
-            line.trim().startsWith("- ") ||
-            line.trim().startsWith("* ")
+            trimmedLine.startsWith("- ") ||
+            trimmedLine.startsWith("* ")
         ) {
 
             const bullet =
@@ -249,45 +339,36 @@ function formatAIResponse(text) {
             bullet.className =
                 "ai-bullet";
 
-
             const symbol =
                 document.createElement("span");
 
-            symbol.textContent =
-                "•";
-
+            symbol.textContent = "•";
 
             const content =
                 document.createElement("span");
 
-
             addInlineFormatting(
                 content,
-                line.trim().substring(2)
+                trimmedLine.substring(2)
             );
-
 
             bullet.appendChild(symbol);
-
             bullet.appendChild(content);
 
-            container.appendChild(
-                bullet
-            );
+            container.appendChild(bullet);
 
             return;
         }
 
 
-        // ==========================================
+        // ==================================================
         // NUMBERED LIST
-        // ==========================================
+        // ==================================================
 
         const numberMatch =
-            line.match(
-                /^\s*(\d+)\.\s+(.*)$/
+            trimmedLine.match(
+                /^(\d+)\.\s+(.+)$/
             );
-
 
         if (numberMatch) {
 
@@ -297,55 +378,64 @@ function formatAIResponse(text) {
             numbered.className =
                 "ai-numbered";
 
-
             const number =
                 document.createElement("span");
 
             number.textContent =
-                numberMatch[1] + ".";
-
+                `${numberMatch[1]}.`;
 
             const content =
                 document.createElement("span");
-
 
             addInlineFormatting(
                 content,
                 numberMatch[2]
             );
 
-
             numbered.appendChild(number);
-
             numbered.appendChild(content);
 
-            container.appendChild(
-                numbered
-            );
+            container.appendChild(numbered);
 
             return;
         }
 
 
-        // ==========================================
+        // ==================================================
         // NORMAL TEXT
-        // ==========================================
+        // ==================================================
 
         const paragraph =
             document.createElement("div");
-
 
         addInlineFormatting(
             paragraph,
             line
         );
 
-
-        container.appendChild(
-            paragraph
-        );
-
+        container.appendChild(paragraph);
     });
+
+
+    // Unclosed code block
+    if (inCodeBlock && codeContent) {
+
+        const codeWrapper =
+            document.createElement("div");
+
+        codeWrapper.className =
+            "code-wrapper";
+
+        const code =
+            document.createElement("pre");
+
+        code.textContent =
+            codeContent.replace(/\n$/, "");
+
+        codeWrapper.appendChild(code);
+
+        container.appendChild(codeWrapper);
+    }
 
 
     return container;
@@ -353,102 +443,17 @@ function formatAIResponse(text) {
 
 
 // ==================================================
-// INLINE MARKDOWN
+// ADD NORMAL MESSAGE
 // ==================================================
 
-function addInlineFormatting(
-    container,
-    text
-) {
+function addMessage(role, text) {
 
-    const parts =
-        String(text || "").split(
-            /(\*\*.*?\*\*|`.*?`|\*.*?\*)/g
-        );
-
-
-    parts.forEach(part => {
-
-        // Bold
-        if (
-            part.startsWith("**") &&
-            part.endsWith("**")
-        ) {
-
-            const bold =
-                document.createElement("strong");
-
-            bold.textContent =
-                part.slice(2, -2);
-
-            container.appendChild(
-                bold
-            );
-
-            return;
-        }
-
-
-        // Inline code
-        if (
-            part.startsWith("`") &&
-            part.endsWith("`")
-        ) {
-
-            const code =
-                document.createElement("code");
-
-            code.textContent =
-                part.slice(1, -1);
-
-            container.appendChild(
-                code
-            );
-
-            return;
-        }
-
-
-        // Italic
-        if (
-            part.startsWith("*") &&
-            part.endsWith("*")
-        ) {
-
-            const italic =
-                document.createElement("em");
-
-            italic.textContent =
-                part.slice(1, -1);
-
-            container.appendChild(
-                italic
-            );
-
-            return;
-        }
-
-
-        container.appendChild(
-            document.createTextNode(part)
-        );
-
-    });
-}
-
-
-// ==================================================
-// ADD MESSAGE
-// ==================================================
-
-function addMessage(
-    role,
-    text
-) {
+    if (!messagesBox) {
+        return;
+    }
 
     const messageDiv =
         document.createElement("div");
-
 
     messageDiv.className =
         role === "assistant"
@@ -460,8 +465,7 @@ function addMessage(
     const avatar =
         document.createElement("div");
 
-    avatar.className =
-        "avatar";
+    avatar.className = "avatar";
 
     avatar.textContent =
         role === "user"
@@ -481,8 +485,7 @@ function addMessage(
     const bubble =
         document.createElement("div");
 
-    bubble.className =
-        "bubble";
+    bubble.className = "bubble";
 
 
     if (role === "assistant") {
@@ -494,14 +497,9 @@ function addMessage(
     } else {
 
         bubble.textContent =
-            text;
+            String(text || "");
 
     }
-
-
-    contentWrapper.appendChild(
-        bubble
-    );
 
 
     // Time
@@ -521,27 +519,15 @@ function addMessage(
         );
 
 
-    contentWrapper.appendChild(
-        time
-    );
+    contentWrapper.appendChild(bubble);
+    contentWrapper.appendChild(time);
 
+    messageDiv.appendChild(avatar);
+    messageDiv.appendChild(contentWrapper);
 
-    messageDiv.appendChild(
-        avatar
-    );
+    messagesBox.appendChild(messageDiv);
 
-    messageDiv.appendChild(
-        contentWrapper
-    );
-
-
-    messagesBox.appendChild(
-        messageDiv
-    );
-
-
-    messagesBox.scrollTop =
-        messagesBox.scrollHeight;
+    scrollMessagesToBottom();
 }
 
 
@@ -554,6 +540,10 @@ function addAIMessage(
     usedRag = false
 ) {
 
+    if (!messagesBox) {
+        return;
+    }
+
     const messageDiv =
         document.createElement("div");
 
@@ -565,11 +555,9 @@ function addAIMessage(
     const avatar =
         document.createElement("div");
 
-    avatar.className =
-        "avatar";
+    avatar.className = "avatar";
 
-    avatar.textContent =
-        "🤖";
+    avatar.textContent = "🤖";
 
 
     // Content
@@ -584,9 +572,7 @@ function addAIMessage(
     const bubble =
         document.createElement("div");
 
-    bubble.className =
-        "bubble";
-
+    bubble.className = "bubble";
 
     bubble.appendChild(
         formatAIResponse(text)
@@ -601,9 +587,11 @@ function addAIMessage(
         "message-actions";
 
 
-    // Copy
+    // Copy button
     const copyButton =
         document.createElement("button");
+
+    copyButton.type = "button";
 
     copyButton.className =
         "copy-response";
@@ -619,7 +607,7 @@ function addAIMessage(
             try {
 
                 await navigator.clipboard.writeText(
-                    text
+                    String(text || "")
                 );
 
                 copyButton.textContent =
@@ -638,16 +626,12 @@ function addAIMessage(
                     "Copy failed:",
                     error
                 );
-
             }
-
         }
     );
 
 
-    actions.appendChild(
-        copyButton
-    );
+    actions.appendChild(copyButton);
 
 
     // RAG status
@@ -657,23 +641,12 @@ function addAIMessage(
     ragStatus.className =
         "rag-status";
 
+    ragStatus.textContent =
+        usedRag
+            ? "📄 Document used"
+            : "🤖 General AI";
 
-    if (usedRag) {
-
-        ragStatus.textContent =
-            "📄 Document used";
-
-    } else {
-
-        ragStatus.textContent =
-            "🤖 General AI";
-
-    }
-
-
-    actions.appendChild(
-        ragStatus
-    );
+    actions.appendChild(ragStatus);
 
 
     // Time
@@ -693,35 +666,16 @@ function addAIMessage(
         );
 
 
-    contentWrapper.appendChild(
-        bubble
-    );
+    contentWrapper.appendChild(bubble);
+    contentWrapper.appendChild(actions);
+    contentWrapper.appendChild(time);
 
-    contentWrapper.appendChild(
-        actions
-    );
+    messageDiv.appendChild(avatar);
+    messageDiv.appendChild(contentWrapper);
 
-    contentWrapper.appendChild(
-        time
-    );
+    messagesBox.appendChild(messageDiv);
 
-
-    messageDiv.appendChild(
-        avatar
-    );
-
-    messageDiv.appendChild(
-        contentWrapper
-    );
-
-
-    messagesBox.appendChild(
-        messageDiv
-    );
-
-
-    messagesBox.scrollTop =
-        messagesBox.scrollHeight;
+    scrollMessagesToBottom();
 }
 
 
@@ -733,6 +687,9 @@ function showLoading() {
 
     removeLoading();
 
+    if (!messagesBox) {
+        return;
+    }
 
     const loading =
         document.createElement("div");
@@ -742,7 +699,6 @@ function showLoading() {
 
     loading.className =
         "message bot";
-
 
     loading.innerHTML = `
         <div class="avatar">🤖</div>
@@ -760,14 +716,9 @@ function showLoading() {
         </div>
     `;
 
+    messagesBox.appendChild(loading);
 
-    messagesBox.appendChild(
-        loading
-    );
-
-
-    messagesBox.scrollTop =
-        messagesBox.scrollHeight;
+    scrollMessagesToBottom();
 }
 
 
@@ -782,11 +733,8 @@ function removeLoading() {
             "loading-message"
         );
 
-
     if (loading) {
-
         loading.remove();
-
     }
 }
 
@@ -797,59 +745,70 @@ function removeLoading() {
 
 async function sendMessage() {
 
+    if (isSending) {
+        return;
+    }
+
+    if (!input) {
+        return;
+    }
+
     const message =
         input.value.trim();
 
-
     if (!message) {
-
         return;
-
     }
 
 
     // ==================================================
-    // IMPORTANT CHAT FIX
+    // CREATE CHAT IF NEEDED
     // ==================================================
 
-    // If no current chat exists,
-    // create one before sending message.
-
     if (currentChatId === null) {
 
-        await createNewChat(false);
+        const newChatId =
+            await createNewChat(false);
 
+        if (newChatId === null) {
+
+            addAIMessage(
+                "Unable to create a new chat. Please try again."
+            );
+
+            return;
+        }
     }
 
 
     if (currentChatId === null) {
-
-        console.error(
-            "Chat ID is still null"
-        );
-
         return;
-
     }
 
 
-    input.disabled =
-        true;
+    // ==================================================
+    // LOCK INPUT
+    // ==================================================
 
-    sendButton.disabled =
-        true;
+    isSending = true;
+
+    input.disabled = true;
+
+    if (sendButton) {
+        sendButton.disabled = true;
+    }
 
 
-    // User message
+    // ==================================================
+    // SHOW USER MESSAGE
+    // ==================================================
+
     addMessage(
         "user",
         message
     );
 
-
-    input.value =
-        "";
-
+    input.value = "";
 
     showLoading();
 
@@ -869,8 +828,6 @@ async function sendMessage() {
 
                     body: JSON.stringify({
 
-                        // IMPORTANT
-                        // Always send current chat ID
                         chat_id:
                             Number(currentChatId),
 
@@ -878,7 +835,7 @@ async function sendMessage() {
                             message,
 
                         document_id:
-                            currentDocumentId
+                            currentDocumentId || null
 
                     })
                 }
@@ -887,10 +844,14 @@ async function sendMessage() {
 
         if (!response.ok) {
 
-            throw new Error(
-                `HTTP ${response.status}`
-            );
+            const errorMessage =
+                await getErrorMessage(
+                    response
+                );
 
+            throw new Error(
+                errorMessage
+            );
         }
 
 
@@ -898,10 +859,16 @@ async function sendMessage() {
             await response.json();
 
 
-        // ==================================================
-        // IMPORTANT
-        // Keep returned chat ID
-        // ==================================================
+        if (
+            data.chat_id === undefined ||
+            data.chat_id === null
+        ) {
+
+            throw new Error(
+                "Backend did not return chat_id."
+            );
+        }
+
 
         currentChatId =
             Number(data.chat_id);
@@ -911,12 +878,13 @@ async function sendMessage() {
 
 
         addAIMessage(
-            data.response,
+            data.response ||
+                "Sorry, I couldn't generate a response.",
+
             data.used_rag === true
         );
 
 
-        // Refresh sidebar
         await loadChats();
 
 
@@ -927,26 +895,24 @@ async function sendMessage() {
             error
         );
 
-
         removeLoading();
 
-
-        addMessage(
-            "assistant",
-            "Sorry, something went wrong. Please try again."
+        addAIMessage(
+            `❌ ${error.message || "Something went wrong. Please try again."}`
         );
 
+    } finally {
+
+        isSending = false;
+
+        input.disabled = false;
+
+        if (sendButton) {
+            sendButton.disabled = false;
+        }
+
+        input.focus();
     }
-
-
-    input.disabled =
-        false;
-
-    sendButton.disabled =
-        false;
-
-
-    input.focus();
 }
 
 
@@ -971,10 +937,14 @@ async function createNewChat(
 
         if (!response.ok) {
 
-            throw new Error(
-                "Failed to create chat"
-            );
+            const errorMessage =
+                await getErrorMessage(
+                    response
+                );
 
+            throw new Error(
+                errorMessage
+            );
         }
 
 
@@ -982,47 +952,47 @@ async function createNewChat(
             await response.json();
 
 
-        // ==================================================
-        // IMPORTANT
-        // Set current chat ID
-        // ==================================================
+        if (
+            data.chat_id === undefined ||
+            data.chat_id === null
+        ) {
+
+            throw new Error(
+                "Backend did not return chat_id."
+            );
+        }
+
 
         currentChatId =
             Number(data.chat_id);
 
 
-        // Remove old PDF context
-        currentDocumentId =
-            null;
+        // New chat should not use old PDF context.
+        currentDocumentId = null;
 
 
         if (uploadStatus) {
-
-            uploadStatus.textContent =
-                "";
-
+            uploadStatus.textContent = "";
         }
 
 
-        messagesBox.innerHTML =
-            "";
+        if (messagesBox) {
+            messagesBox.innerHTML = "";
+        }
 
 
         if (showWelcome) {
 
-            addMessage(
-                "assistant",
-                "Hello! 👋 How can I help you today?"
+            addAIMessage(
+                "Hello! 👋 How can I help you today?",
+                false
             );
-
         }
 
 
         await loadChats();
 
-
         input.focus();
-
 
         return currentChatId;
 
@@ -1034,13 +1004,9 @@ async function createNewChat(
             error
         );
 
-
-        currentChatId =
-            null;
-
+        currentChatId = null;
 
         return null;
-
     }
 }
 
@@ -1049,40 +1015,28 @@ async function createNewChat(
 // FORMAT CHAT TIME
 // ==================================================
 
-function formatChatTime(
-    dateValue
-) {
+function formatChatTime(dateValue) {
 
     if (!dateValue) {
-
         return "Today";
-
     }
-
 
     const date =
         new Date(dateValue);
-
 
     if (
         Number.isNaN(
             date.getTime()
         )
     ) {
-
         return "Today";
-
     }
 
-
-    const now =
-        new Date();
-
+    const now = new Date();
 
     const diff =
         now.getTime() -
         date.getTime();
-
 
     const minutes =
         Math.floor(
@@ -1091,16 +1045,12 @@ function formatChatTime(
 
 
     if (minutes < 1) {
-
         return "Just now";
-
     }
 
 
     if (minutes < 60) {
-
         return `${minutes} min ago`;
-
     }
 
 
@@ -1111,9 +1061,7 @@ function formatChatTime(
 
 
     if (hours < 24) {
-
         return `${hours} hr ago`;
-
     }
 
 
@@ -1124,16 +1072,12 @@ function formatChatTime(
 
 
     if (days === 1) {
-
         return "Yesterday";
-
     }
 
 
     if (days < 7) {
-
         return `${days} days ago`;
-
     }
 
 
@@ -1156,23 +1100,17 @@ function removeChatFromUI(
 ) {
 
     if (!chatElement) {
-
         return;
-
     }
-
 
     chatElement.style.transition =
         "all 0.2s ease";
 
-
     chatElement.style.opacity =
         "0";
 
-
     chatElement.style.transform =
         "translateX(-10px)";
-
 
     setTimeout(() => {
 
@@ -1204,10 +1142,14 @@ async function deleteChat(
 
         if (!response.ok) {
 
-            throw new Error(
-                `HTTP ${response.status}`
-            );
+            const errorMessage =
+                await getErrorMessage(
+                    response
+                );
 
+            throw new Error(
+                errorMessage
+            );
         }
 
 
@@ -1221,42 +1163,35 @@ async function deleteChat(
                 data.message ||
                 "Failed to delete chat"
             );
-
         }
 
 
-        // Remove from UI
         if (chatElement) {
 
             removeChatFromUI(
                 chatElement
             );
-
         }
 
 
-        // If current chat was deleted
+        // Current chat deleted
         if (
             Number(currentChatId) ===
             Number(chatId)
         ) {
 
-            currentChatId =
-                null;
+            currentChatId = null;
+            currentDocumentId = null;
 
-            currentDocumentId =
-                null;
-
-            messagesBox.innerHTML =
-                "";
-
+            if (messagesBox) {
+                messagesBox.innerHTML = "";
+            }
 
             await initializeChat();
 
         } else {
 
             await loadChats();
-
         }
 
 
@@ -1267,6 +1202,10 @@ async function deleteChat(
             error
         );
 
+        alert(
+            error.message ||
+            "Failed to delete chat."
+        );
     }
 }
 
@@ -1288,9 +1227,10 @@ async function loadChats() {
         if (!response.ok) {
 
             throw new Error(
-                "Failed to load chats"
+                await getErrorMessage(
+                    response
+                )
             );
-
         }
 
 
@@ -1305,60 +1245,43 @@ async function loadChats() {
 
 
         if (!container) {
-
             return;
-
         }
 
 
-        container.innerHTML =
-            "";
+        container.innerHTML = "";
 
 
         if (
-            !chats ||
+            !Array.isArray(chats) ||
             chats.length === 0
         ) {
 
             const empty =
                 document.createElement("div");
 
-
             empty.textContent =
                 "No recent chats";
-
 
             empty.style.padding =
                 "15px 10px";
 
-
             empty.style.color =
                 "#718096";
-
 
             empty.style.fontSize =
                 "12px";
 
-
-            container.appendChild(
-                empty
-            );
-
+            container.appendChild(empty);
 
             return;
-
         }
 
 
-        chats.forEach(chat => {
-
-            // ======================================
-            // Chat Item
-            // ======================================
+        chats.forEach((chat) => {
 
             const item =
                 document.createElement("div");
-
 
             item.className =
                 "recent-chat";
@@ -1374,33 +1297,23 @@ async function loadChats() {
                 item.classList.add(
                     "active"
                 );
-
             }
 
 
-            // ======================================
-            // Chat Icon
-            // ======================================
-
+            // Chat icon
             const icon =
                 document.createElement("div");
 
-
             icon.className =
                 "chat-history-icon";
-
 
             icon.textContent =
                 "💬";
 
 
-            // ======================================
             // Content
-            // ======================================
-
             const content =
                 document.createElement("div");
-
 
             content.className =
                 "chat-history-content";
@@ -1409,10 +1322,8 @@ async function loadChats() {
             const title =
                 document.createElement("div");
 
-
             title.className =
                 "chat-history-title";
-
 
             title.textContent =
                 chat.title ||
@@ -1422,10 +1333,8 @@ async function loadChats() {
             const time =
                 document.createElement("div");
 
-
             time.className =
                 "chat-history-time";
-
 
             time.textContent =
                 formatChatTime(
@@ -1434,35 +1343,21 @@ async function loadChats() {
                 );
 
 
-            content.appendChild(
-                title
-            );
+            content.appendChild(title);
+            content.appendChild(time);
 
 
-            content.appendChild(
-                time
-            );
-
-
-            // ======================================
-            // Delete Button
-            // ======================================
-
+            // Delete button
             const deleteButton =
                 document.createElement("button");
 
+            deleteButton.type = "button";
 
             deleteButton.className =
                 "delete-chat-btn";
 
-
-            deleteButton.type =
-                "button";
-
-
             deleteButton.title =
                 "Delete chat";
-
 
             deleteButton.textContent =
                 "🗑";
@@ -1470,55 +1365,35 @@ async function loadChats() {
 
             deleteButton.addEventListener(
                 "click",
-                function(event) {
+                (event) => {
 
                     event.stopPropagation();
-
 
                     deleteChat(
                         chat.id,
                         item
                     );
-
                 }
             );
 
 
-            // ======================================
-            // Open Chat
-            // ======================================
-
+            // Open chat
             item.addEventListener(
                 "click",
-                function() {
+                () => {
 
                     loadChat(
                         chat.id
                     );
-
                 }
             );
 
 
-            item.appendChild(
-                icon
-            );
+            item.appendChild(icon);
+            item.appendChild(content);
+            item.appendChild(deleteButton);
 
-
-            item.appendChild(
-                content
-            );
-
-
-            item.appendChild(
-                deleteButton
-            );
-
-
-            container.appendChild(
-                item
-            );
-
+            container.appendChild(item);
         });
 
 
@@ -1528,7 +1403,6 @@ async function loadChats() {
             "History Error:",
             error
         );
-
     }
 }
 
@@ -1552,9 +1426,10 @@ async function loadChat(
         if (!response.ok) {
 
             throw new Error(
-                "Failed to load chat"
+                await getErrorMessage(
+                    response
+                )
             );
-
         }
 
 
@@ -1562,34 +1437,28 @@ async function loadChat(
             await response.json();
 
 
-        // ==================================================
-        // IMPORTANT
-        // Set current chat
-        // ==================================================
-
         currentChatId =
             Number(chatId);
 
 
-        // Reset document context
-        currentDocumentId =
-            null;
+        // We don't know which document was used
+        // by an old chat, so clear it.
+        currentDocumentId = null;
 
 
         if (uploadStatus) {
-
-            uploadStatus.textContent =
-                "";
-
+            uploadStatus.textContent = "";
         }
 
 
-        messagesBox.innerHTML =
-            "";
+        if (messagesBox) {
+            messagesBox.innerHTML = "";
+        }
 
 
-        messages.forEach(
-            message => {
+        if (Array.isArray(messages)) {
+
+            messages.forEach((message) => {
 
                 if (
                     message.role ===
@@ -1597,7 +1466,8 @@ async function loadChat(
                 ) {
 
                     addAIMessage(
-                        message.content
+                        message.content,
+                        false
                     );
 
                 } else {
@@ -1606,15 +1476,12 @@ async function loadChat(
                         "user",
                         message.content
                     );
-
                 }
-
-            }
-        );
+            });
+        }
 
 
         await loadChats();
-
 
         input.focus();
 
@@ -1626,6 +1493,9 @@ async function loadChat(
             error
         );
 
+        addAIMessage(
+            "❌ Failed to load this chat."
+        );
     }
 }
 
@@ -1647,9 +1517,10 @@ async function initializeChat() {
         if (!response.ok) {
 
             throw new Error(
-                "Failed to load chats"
+                await getErrorMessage(
+                    response
+                )
             );
-
         }
 
 
@@ -1657,37 +1528,25 @@ async function initializeChat() {
             await response.json();
 
 
-        // ==================================================
-        // EXISTING CHAT FOUND
-        // ==================================================
-
+        // Existing chat
         if (
-            chats &&
+            Array.isArray(chats) &&
             chats.length > 0
         ) {
 
-            // Backend returns newest first
             const latestChat =
                 chats[0];
-
 
             await loadChat(
                 latestChat.id
             );
 
-
             return;
-
         }
 
 
-        // ==================================================
-        // NO CHAT FOUND
-        // ==================================================
-
-        await createNewChat(
-            true
-        );
+        // No chat exists
+        await createNewChat(true);
 
 
     } catch (error) {
@@ -1697,6 +1556,9 @@ async function initializeChat() {
             error
         );
 
+        addAIMessage(
+            "❌ Unable to connect to the backend. Make sure FastAPI is running."
+        );
     }
 }
 
@@ -1715,7 +1577,6 @@ function updateDocumentUI(
             "documentName"
         );
 
-
     const documentSize =
         document.getElementById(
             "documentSize"
@@ -1727,7 +1588,6 @@ function updateDocumentUI(
         documentName.textContent =
             filename ||
             "Document";
-
     }
 
 
@@ -1739,7 +1599,6 @@ function updateDocumentUI(
                 size /
                 (1024 * 1024);
 
-
             documentSize.textContent =
                 `${mb.toFixed(1)} MB • Uploaded just now`;
 
@@ -1747,9 +1606,39 @@ function updateDocumentUI(
 
             documentSize.textContent =
                 "PDF • Uploaded just now";
-
         }
+    }
+}
 
+
+// ==================================================
+// RESET DOCUMENT UI
+// ==================================================
+
+function resetDocumentUI() {
+
+    const documentName =
+        document.getElementById(
+            "documentName"
+        );
+
+    const documentSize =
+        document.getElementById(
+            "documentSize"
+        );
+
+
+    if (documentName) {
+
+        documentName.textContent =
+            "No document";
+    }
+
+
+    if (documentSize) {
+
+        documentSize.textContent =
+            "Upload a PDF to get started";
     }
 }
 
@@ -1758,17 +1647,22 @@ function updateDocumentUI(
 // PDF UPLOAD BUTTON
 // ==================================================
 
-if (uploadButton && pdfInput) {
+if (
+    uploadButton &&
+    pdfInput
+) {
 
     uploadButton.addEventListener(
         "click",
         () => {
 
-            pdfInput.click();
+            if (isUploading) {
+                return;
+            }
 
+            pdfInput.click();
         }
     );
-
 }
 
 
@@ -1783,57 +1677,66 @@ if (pdfInput) {
         async () => {
 
             const file =
-                pdfInput.files[0];
+                pdfInput.files?.[0];
 
 
             if (!file) {
-
                 return;
-
             }
 
 
-            // ==========================================
-            // PDF CHECK
-            // ==========================================
+            if (isUploading) {
+                return;
+            }
 
-            if (
-                file.type !==
-                "application/pdf"
-            ) {
+
+            // ==================================================
+            // PDF CHECK
+            // ==================================================
+
+            const isPDF =
+                file.type ===
+                    "application/pdf" ||
+                file.name
+                    .toLowerCase()
+                    .endsWith(".pdf");
+
+
+            if (!isPDF) {
+
+                if (uploadStatus) {
+
+                    uploadStatus.textContent =
+                        "❌ Only PDF files are allowed.";
+                }
+
+                pdfInput.value = "";
+
+                return;
+            }
+
+
+            // ==================================================
+            // LOADING
+            // ==================================================
+
+            isUploading = true;
+
+
+            if (uploadButton) {
+                uploadButton.disabled = true;
+            }
+
+
+            if (uploadStatus) {
 
                 uploadStatus.textContent =
-                    "❌ Only PDF files are allowed.";
-
-
-                pdfInput.value =
-                    "";
-
-
-                return;
-
+                    "⏳ Processing PDF...";
             }
 
-
-            // ==========================================
-            // Loading
-            // ==========================================
-
-            uploadStatus.textContent =
-                "⏳ Processing PDF...";
-
-
-            uploadButton.disabled =
-                true;
-
-
-            // ==========================================
-            // FormData
-            // ==========================================
 
             const formData =
                 new FormData();
-
 
             formData.append(
                 "file",
@@ -1856,9 +1759,10 @@ if (pdfInput) {
                 if (!response.ok) {
 
                     throw new Error(
-                        `HTTP ${response.status}`
+                        await getErrorMessage(
+                            response
+                        )
                     );
-
                 }
 
 
@@ -1866,50 +1770,59 @@ if (pdfInput) {
                     await response.json();
 
 
-                // ======================================
-                // Backend Error
-                // ======================================
-
                 if (!data.success) {
 
-                    uploadStatus.textContent =
-                        `❌ ${data.message}`;
-
-
-                    return;
-
+                    throw new Error(
+                        data.message ||
+                        "PDF processing failed."
+                    );
                 }
 
 
-                // ======================================
-                // Save Document ID
-                // ======================================
+                if (!data.document_id) {
+
+                    throw new Error(
+                        "Backend did not return document_id."
+                    );
+                }
+
+
+                // ==================================================
+                // SAVE DOCUMENT ID
+                // ==================================================
 
                 currentDocumentId =
                     data.document_id;
 
 
-                // ======================================
-                // Update UI
-                // ======================================
+                // ==================================================
+                // UPDATE DOCUMENT UI
+                // ==================================================
 
                 updateDocumentUI(
-                    data.filename,
+                    data.filename ||
+                    file.name,
                     file.size
                 );
 
 
-                uploadStatus.textContent =
-                    `✅ ${data.filename} uploaded`;
+                if (uploadStatus) {
+
+                    uploadStatus.textContent =
+                        `✅ ${data.filename || file.name} uploaded`;
+                }
 
 
-                // ======================================
-                // Upload Message
-                // ======================================
+                // ==================================================
+                // SHOW SUCCESS MESSAGE
+                // ==================================================
 
-                addMessage(
-                    "assistant",
-                    `📄 **${data.filename}** is ready.\n\n${data.pages} page(s) processed and ${data.chunks} chunks created.\n\nYou can now ask questions about this document.`
+                addAIMessage(
+                    `📄 **${data.filename || file.name}** is ready.\n\n` +
+                    `${data.pages || 0} page(s) processed and ` +
+                    `${data.chunks || 0} chunks created.\n\n` +
+                    `You can now ask questions about this document.`,
+                    true
                 );
 
 
@@ -1921,30 +1834,29 @@ if (pdfInput) {
                 );
 
 
-                uploadStatus.textContent =
-                    "❌ PDF upload failed.";
+                currentDocumentId =
+                    null;
 
+
+                if (uploadStatus) {
+
+                    uploadStatus.textContent =
+                        `❌ ${error.message || "PDF upload failed."}`;
+                }
+            } finally {
+
+                isUploading = false;
+
+
+                if (uploadButton) {
+                    uploadButton.disabled = false;
+                }
+
+
+                pdfInput.value = "";
             }
-
-
-            // ==========================================
-            // Enable Upload
-            // ==========================================
-
-            uploadButton.disabled =
-                false;
-
-
-            // ==========================================
-            // Reset File Input
-            // ==========================================
-
-            pdfInput.value =
-                "";
-
         }
     );
-
 }
 
 
@@ -1958,7 +1870,6 @@ if (sendButton) {
         "click",
         sendMessage
     );
-
 }
 
 
@@ -1972,13 +1883,13 @@ if (newChatButton) {
         "click",
         async () => {
 
-            await createNewChat(
-                true
-            );
+            if (isSending) {
+                return;
+            }
 
+            await createNewChat(true);
         }
     );
-
 }
 
 
@@ -1990,7 +1901,7 @@ if (input) {
 
     input.addEventListener(
         "keydown",
-        function(event) {
+        (event) => {
 
             if (
                 event.key === "Enter" &&
@@ -2000,12 +1911,9 @@ if (input) {
                 event.preventDefault();
 
                 sendMessage();
-
             }
-
         }
     );
-
 }
 
 
@@ -2013,8 +1921,11 @@ if (input) {
 // INITIAL LOAD
 // ==================================================
 
-// IMPORTANT:
-// Do NOT call loadChats() here.
-// We need to set currentChatId first.
+document.addEventListener(
+    "DOMContentLoaded",
+    () => {
 
-initializeChat();
+        initializeChat();
+
+    }
+);
